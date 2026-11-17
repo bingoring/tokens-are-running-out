@@ -9,7 +9,7 @@ let package = Package(
         .executable(name: "running-out", targets: ["running-out"]),
     ],
     targets: [
-        .target(name: "RunningOutCore"),
+        .target(name: "RunningOutCore", resources: [.copy("Resources/pricing.json")]),
         .executableTarget(name: "running-out", dependencies: ["RunningOutCore"]),
         .testTarget(name: "RunningOutCoreTests", dependencies: ["RunningOutCore"]),
     ]
