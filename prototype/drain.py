@@ -8,6 +8,8 @@ Read-only. Usage:
 
 Rules (design doc sections 6.1-6.4):
   * only `type == "assistant"` lines with `message.usage`, deduplicated by `message.id`
+    across all transcripts: resumed or forked sessions copy earlier calls into a new file,
+    so each call is counted once, in its owner file (see `owners`)
   * a call is a rebuild when cache_creation >= 50,000 and cache_creation > cache_read
   * main-session rebuild causes, checked in order: session start (no earlier call in the
     file), after compaction, model changed, expired (gap > TTL of the previous call),
@@ -61,6 +63,51 @@ def call_cost(usage):
     )
 
 
+def iter_calls(path):
+    """Yield (message, usage, record) for real assistant API calls, in file order."""
+    with open(path, "rb") as fh:
+        for line in fh:
+            if b"compact_boundary" in line:
+                yield None, None, {"compact": True}
+                continue
+            if b'"usage"' not in line or b'"assistant"' not in line:
+                continue
+            try:
+                o = json.loads(line)
+            except ValueError:
+                continue
+            if o.get("type") != "assistant" or not o.get("timestamp"):
+                continue
+            m = o.get("message") or {}
+            u = m.get("usage") or {}
+            if not u or not m.get("id") or m.get("model") == "<synthetic>":
+                continue
+            yield m, u, o
+
+
+def owners(files):
+    """Pick one owning file per message.id.
+
+    Resumed or forked sessions copy earlier messages into a new transcript, so the same
+    message.id can appear in several files. Each call is counted once, in its owner:
+    prefer the file whose name matches the line's sessionId (main transcripts only),
+    then the file created first, then the path.
+    """
+    best = {}
+    for path in files:
+        is_sub = "/subagents/" in path
+        file_sid = os.path.basename(path)[:-6]
+        born = os.stat(path).st_birthtime
+        for m, _, o in iter_calls(path):
+            if m is None:
+                continue
+            key = (0 if (not is_sub and o.get("sessionId") == file_sid) else 1, born, path)
+            mid = m["id"]
+            if mid not in best or key < best[mid]:
+                best[mid] = key
+    return {mid: key[2] for mid, key in best.items()}
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--from", dest="lo", required=True, help="inclusive, ISO 8601 UTC")
@@ -80,6 +127,8 @@ def main():
     expired_write_cost = expired_reducible = 0.0
     breaks = {"short break": [0, 0, 0.0], "long break": [0, 0, 0.0]}
 
+    owner = owners(files)
+
     for path in files:
         if os.path.getmtime(path) < lo:
             continue
@@ -88,28 +137,20 @@ def main():
         last_t = last_model = last_version = None
         last_ttl = "5m" if is_sub else "1h"
         compacted = False
-        with open(path, "rb") as fh:
-            for line in fh:
-                if b"compact_boundary" in line:
+        if True:
+            for m, u, o in iter_calls(path):
+                if m is None:
                     compacted = True
                     continue
-                if b'"usage"' not in line or b'"assistant"' not in line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    continue
-                if o.get("type") != "assistant" or not o.get("timestamp"):
-                    continue
-                m = o.get("message") or {}
-                u = m.get("usage") or {}
-                mid = m.get("id")
-                if not u or mid in seen or m.get("model") == "<synthetic>":
+                mid = m["id"]
+                if mid in seen:
                     continue
                 seen.add(mid)
                 t = iso(o["timestamp"])
 
-                if lo <= t < hi:
+                # Copied calls (owned by another file) still set this file's context,
+                # but are counted only in their owner.
+                if lo <= t < hi and owner.get(mid) == path:
                     calls += 1
                     cc = u.get("cache_creation_input_tokens", 0)
                     cr = u.get("cache_read_input_tokens", 0)
