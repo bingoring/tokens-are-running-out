@@ -67,14 +67,17 @@ def iter_calls(path):
     """Yield (message, usage, record) for real assistant API calls, in file order."""
     with open(path, "rb") as fh:
         for line in fh:
-            if b"compact_boundary" in line:
-                yield None, None, {"compact": True}
-                continue
-            if b'"usage"' not in line or b'"assistant"' not in line:
+            maybe_compact = b"compact_boundary" in line
+            maybe_call = b'"usage"' in line and b'"assistant"' in line
+            if not (maybe_compact or maybe_call):
                 continue
             try:
                 o = json.loads(line)
             except ValueError:
+                continue
+            # The words can also appear inside message text, so check the record itself.
+            if o.get("type") == "system" and o.get("subtype") == "compact_boundary":
+                yield None, None, {"compact": True}
                 continue
             if o.get("type") != "assistant" or not o.get("timestamp"):
                 continue
