@@ -114,4 +114,94 @@ struct UsageAnalyzerTests {
         #expect(report.idleRebuildShare == 0)
         #expect(report.rebuilds.isEmpty)
     }
+
+    private func report(of dir: TempDir) throws -> UsageReport {
+        let indexer = try Indexer(
+            root: dir.url.appendingPathComponent("projects"),
+            databaseURL: dir.url.appendingPathComponent("index.sqlite"))
+        try indexer.indexAll()
+        return try UsageAnalyzer(indexer: indexer, prices: PriceTable.bundled()).report(
+            from: nov10, to: nov10 + 86_400)
+    }
+
+    @Test("a rebuild's cache write goes to its cause and the rest of that call to normal work")
+    func rebuildSplit() throws {
+        let dir = try TempDir()
+        // Session start: write 60,000 x 8000 = 480,000,000; input 1,000 x 4000 + output 2,000 x 20000 = 44,000,000.
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 1_000, output: 2_000, write: 60_000),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.bucketCosts[.sessionStartAndCompaction] == 480_000_000)
+        #expect(report.bucketCosts[.normalWork] == 44_000_000)
+    }
+
+    @Test("an advisor consult is charged at the advisor's prices in its call's bucket and also totalled apart")
+    func advisorCost() throws {
+        let dir = try TempDir()
+        // Session start: Opus 5.5 write 60,000 x 8000 = 480,000,000.
+        // Normal work: Fable 5.2 advisor input 50,000 x 8000 + output 800 x 40000 = 432,000,000.
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 0, output: 0, write: 60_000,
+                iterations: [
+                    Fixture.iteration(write: 60_000),
+                    Fixture.iteration(type: "advisor_message", model: "claude-fable-5-2", input: 50_000, output: 800),
+                ]),
+            to: "projects/-p/s1.jsonl")
+        // Subagents: Sonnet 5.5 output 100 x 10000 = 1,000,000; Fable 5.1 advisor input 10,000 x 10000 = 100,000,000.
+        try dir.write(
+            Fixture.call(
+                id: "a1", at: "2026-11-10T00:30:00Z", session: "s1", model: "claude-sonnet-5-5", input: 0, output: 100,
+                iterations: [
+                    Fixture.iteration(output: 100),
+                    Fixture.iteration(type: "advisor_message", model: "claude-fable-5-1", input: 10_000),
+                ]),
+            to: "projects/-p/s1/subagents/agent-a.jsonl")
+        let report = try report(of: dir)
+        #expect(report.bucketCosts[.sessionStartAndCompaction] == 480_000_000)
+        #expect(report.bucketCosts[.normalWork] == 432_000_000)
+        #expect(report.bucketCosts[.subagents] == 101_000_000)
+        #expect(report.totalCost == 1_013_000_000)
+        #expect(report.advisor == AdvisorTotals(calls: 2, inputTokens: 60_000, outputTokens: 800, cost: 532_000_000))
+        #expect(report.unpricedModels.isEmpty)
+    }
+
+    @Test("only the iteration that rebuilt counts as rebuild tokens and goes to the cause")
+    func rebuildIterationOnly() throws {
+        let dir = try TempDir()
+        try dir.write(
+            // normal: write 100 x 8000 = 800,000
+            Fixture.call(id: "m0", at: "2026-11-10T00:00:00Z", session: "s1", input: 0, output: 0, write: 100)
+                // two hours later the first iteration rebuilds (60,000 x 8000 = 480,000,000, short break) and the
+                // second reads it back (300 x 8000 + 70,000 x 200 = 16,400,000, normal work)
+                + Fixture.call(
+                    id: "m1", at: "2026-11-10T02:00:00Z", session: "s1", input: 0, output: 0, read: 70_000,
+                    write: 60_300,
+                    iterations: [Fixture.iteration(write: 60_000), Fixture.iteration(read: 70_000, write: 300)]),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.rebuildCount == 1)
+        #expect(report.rebuildTokens == 60_000)
+        #expect(report.shortBreak == BreakTotals(count: 1, tokens: 60_000, cost: 480_000_000))
+        #expect(report.bucketCosts[.normalWork] == 800_000 + 16_400_000)
+        #expect(report.reducibleCost == 480_000_000 - 60_000 * 200)
+        #expect(report.rebuilds.first?.cacheWriteTokens == 60_000)
+    }
+
+    @Test("a call copied into a resumed session is the context for that session's next call")
+    func copiedCallGivesContext() throws {
+        let dir = try TempDir()
+        let original = Fixture.call(
+            id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 0, output: 0, write: 60_000)
+        try dir.write(original, to: "projects/-p/s1.jsonl")
+        try dir.write(
+            original
+                + Fixture.call(id: "m2", at: "2026-11-10T02:00:00Z", session: "s2", input: 0, output: 0, write: 60_000),
+            to: "projects/-p/s2.jsonl")
+        let report = try report(of: dir)
+        #expect(report.calls == 2)
+        #expect(report.mainRebuildCounts == [.sessionStart: 1, .expiredShortBreak: 1])
+    }
 }

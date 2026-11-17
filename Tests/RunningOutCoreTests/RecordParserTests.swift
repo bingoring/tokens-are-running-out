@@ -146,4 +146,68 @@ struct RecordParserTests {
     func notCandidate() {
         #expect(parse(#"{"type":"user","message":{"role":"user","content":"hi"}}"#) == .notCandidate)
     }
+
+    // MARK: - Iterations (advisor consults and multi-step calls)
+
+    @Test("each iteration becomes a usage part, and an advisor iteration keeps its own model")
+    func iterationsBecomeParts() throws {
+        let line = Fixture.call(
+            id: "m1", at: "2026-11-10T00:00:00Z", input: 3, output: 30, read: 70_000, write: 60_300,
+            iterations: [
+                Fixture.iteration(input: 2, output: 10, write: 60_000),
+                Fixture.iteration(type: "advisor_message", model: "claude-fable-5-2", input: 50_000, output: 800),
+                Fixture.iteration(input: 1, output: 20, read: 70_000, write: 300),
+            ])
+        guard case .call(let call) = parse(line) else {
+            Issue.record("expected a call")
+            return
+        }
+        #expect(
+            call.parts == [
+                UsagePart(inputTokens: 2, outputTokens: 10, cacheWriteTokens: 60_000, cacheWrite1h: 60_000),
+                UsagePart(kind: .advisor, model: "claude-fable-5-2", inputTokens: 50_000, outputTokens: 800),
+                UsagePart(
+                    inputTokens: 1, outputTokens: 20, cacheReadTokens: 70_000, cacheWriteTokens: 300, cacheWrite1h: 300),
+            ])
+        // The top-level fields stay as recorded: they leave out the advisor's input and output.
+        #expect(call.inputTokens == 3)
+        #expect(call.outputTokens == 30)
+    }
+
+    @Test("a single iteration that repeats the top-level usage adds nothing")
+    func singleIterationIsTopLevel() {
+        let line = Fixture.call(
+            id: "m1", at: "2026-11-10T00:00:00Z", input: 2, output: 10, write: 100,
+            iterations: [Fixture.iteration(input: 2, output: 10, write: 100)])
+        guard case .call(let call) = parse(line) else {
+            Issue.record("expected a call")
+            return
+        }
+        #expect(call.iterations.isEmpty)
+        #expect(call.parts == [UsagePart(inputTokens: 2, outputTokens: 10, cacheWriteTokens: 100, cacheWrite1h: 100)])
+    }
+
+    @Test("an iterations field of another shape is ignored and the top-level usage is used")
+    func oddIterationsIgnored() {
+        let line = Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", output: 10)
+            .replacingOccurrences(of: #""cache_creation":{"#, with: #""iterations":"x","cache_creation":{"#)
+        guard case .call(let call) = parse(line) else {
+            Issue.record("expected a call")
+            return
+        }
+        #expect(call.parts == [UsagePart(inputTokens: 2, outputTokens: 10)])
+    }
+
+    @Test("a token count below zero or above one billion makes the line malformed, so sums cannot overflow")
+    func tokenLimits() {
+        let at = "2026-11-10T00:00:00Z"
+        #expect(parse(Fixture.call(id: "m1", at: at, input: -1)) == .malformed)
+        #expect(parse(Fixture.call(id: "m1", at: at, output: 1_000_000_001)) == .malformed)
+        #expect(
+            parse(Fixture.call(id: "m1", at: at, iterations: [Fixture.iteration(input: 2_000_000_000)])) == .malformed)
+        guard case .call = parse(Fixture.call(id: "m1", at: at, output: 1_000_000_000)) else {
+            Issue.record("one billion is still a valid count")
+            return
+        }
+    }
 }

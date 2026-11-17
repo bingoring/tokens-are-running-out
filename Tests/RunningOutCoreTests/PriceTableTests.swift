@@ -85,4 +85,55 @@ struct PriceTableTests {
         #expect(throws: (any Error).self) { try PriceTable(json: Data(negative.utf8)) }
         #expect(throws: (any Error).self) { try PriceTable(json: Data(missing.utf8)) }
     }
+
+    @Test("each part is priced at its own model, so an advisor consult is charged at the advisor's prices")
+    func partsPricedByModel() throws {
+        var record = call(write: 60_000, write1h: 60_000)
+        record.iterations = [
+            UsagePart(cacheWriteTokens: 60_000, cacheWrite1h: 60_000),
+            UsagePart(kind: .advisor, model: "claude-fable-5-2", inputTokens: 50_000, outputTokens: 800),
+        ]
+        let cost = try PriceTable.bundled().cost(of: record)
+        // Opus 5.5 1h write 60,000 x 8000; Fable 5.2 input 50,000 x 8000 and output 800 x 40000.
+        #expect(cost.cacheWrite == 480_000_000)
+        #expect(cost.other == 400_000_000 + 32_000_000)
+        #expect(cost.known)
+    }
+
+    @Test("writes beyond the TTL breakdown are priced as one-hour writes")
+    func writesBeyondBreakdown() throws {
+        let cost = try PriceTable.bundled().cost(of: call(write: 1_000, write5m: 400))
+        #expect(cost.cacheWrite == 600 * 8000 + 400 * 5000)
+    }
+
+    @Test("the long-context tier is decided by each part's own prompt, not the call's sum")
+    func tierPerPart() throws {
+        var record = call(model: "claude-haiku-5-5", read: 120_000)
+        record.iterations = [UsagePart(cacheReadTokens: 60_000), UsagePart(cacheReadTokens: 60_000)]
+        #expect(try PriceTable.bundled().cost(of: record).other == 120_000 * 10)
+    }
+
+    @Test("a model id matches a key exactly or with a date suffix, so a new minor version is unpriced")
+    func exactOrDated() throws {
+        let table = try PriceTable.bundled()
+        #expect(table.lookup(model: "claude-opus-5-5-20261201", promptTokens: 0).known)
+        #expect(!table.lookup(model: "claude-opus-5-6", promptTokens: 0).known)
+        #expect(!table.lookup(model: "claude-opus-5-5-fast", promptTokens: 0).known)
+        #expect(!table.lookup(model: "claude-opus-5-202612", promptTokens: 0).known)
+    }
+
+    @Test("a table without the fallback model is rejected")
+    func fallbackRequired() {
+        let json =
+            #"{"models":{"claude-x":{"input":1,"cache_write_5m":1,"cache_write_1h":1,"cache_read":1,"output":1}}}"#
+        #expect(throws: PriceTableError.self) { try PriceTable(json: Data(json.utf8)) }
+    }
+
+    @Test("the embedded table is a verbatim copy of pricing.json, which the prototype reads")
+    func embeddedMatchesFile() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("Sources/RunningOutCore/Resources/pricing.json")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        #expect(text == PriceTable.embeddedJSON + "\n", "Run scripts/embed-pricing.py after editing pricing.json.")
+    }
 }

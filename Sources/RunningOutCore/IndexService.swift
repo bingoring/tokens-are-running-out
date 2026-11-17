@@ -3,15 +3,22 @@ import Foundation
 /// Serializes all index access, so FSEvents batches and queries never touch SQLite at once.
 public actor IndexService {
     private let indexer: Indexer
-    private let prices: PriceTable
+    private var prices: PriceTable?
 
     public init(root: URL, databaseURL: URL) throws {
         indexer = try Indexer(root: root, databaseURL: databaseURL)
-        prices = try PriceTable.bundled()
     }
 
     public func report(from: Double, to: Double) throws -> UsageReport {
-        try UsageAnalyzer(indexer: indexer, prices: prices).report(from: from, to: to)
+        try UsageAnalyzer(indexer: indexer, prices: priceTable()).report(from: from, to: to)
+    }
+
+    /// Loaded on first use, so indexing never depends on the price table.
+    private func priceTable() throws -> PriceTable {
+        if let prices { return prices }
+        let loaded = try PriceTable.bundled()
+        prices = loaded
+        return loaded
     }
 
     public func report(period: ReportPeriod, now: Date = Date()) throws -> UsageReport {

@@ -9,7 +9,8 @@ let package = Package(
         .executable(name: "running-out", targets: ["running-out"]),
     ],
     targets: [
-        .target(name: "RunningOutCore", resources: [.copy("Resources/pricing.json")]),
+        // pricing.json is embedded as Swift by scripts/embed-pricing.py, so no resource bundle is needed.
+        .target(name: "RunningOutCore", exclude: ["Resources/pricing.json"]),
         .executableTarget(name: "running-out", dependencies: ["RunningOutCore"]),
         .testTarget(name: "RunningOutCoreTests", dependencies: ["RunningOutCore"]),
     ]

@@ -15,6 +15,28 @@ public struct BreakTotals: Sendable, Equatable {
     public var tokens = 0
     /// nano-USD
     public var cost = 0
+
+    public init(count: Int = 0, tokens: Int = 0, cost: Int = 0) {
+        self.count = count
+        self.tokens = tokens
+        self.cost = cost
+    }
+}
+
+/// Advisor consults inside the calls of a window. Their cost is already in the buckets of their calls.
+public struct AdvisorTotals: Sendable, Equatable {
+    public var calls = 0
+    public var inputTokens = 0
+    public var outputTokens = 0
+    /// nano-USD
+    public var cost = 0
+
+    public init(calls: Int = 0, inputTokens: Int = 0, outputTokens: Int = 0, cost: Int = 0) {
+        self.calls = calls
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cost = cost
+    }
 }
 
 /// One main-session rebuild and the evidence for its cause ("분류 근거").
@@ -32,11 +54,35 @@ public struct RebuildEvent: Sendable, Equatable {
     public var model: String
     public var previousVersion: String?
     public var version: String?
+    /// What the rebuilding steps wrote.
     public var cacheWriteTokens: Int
     /// nano-USD
     public var cacheWriteCost: Int
     /// nano-USD; non-zero only for short-break expiries
     public var reducibleCost: Int
+
+    public init(
+        messageID: String, timestamp: Double, file: URL, sessionID: String, title: String?, cause: RebuildCause,
+        previousTimestamp: Double?, gapSeconds: Double?, previousTTL: CacheTTL, previousModel: String?, model: String,
+        previousVersion: String?, version: String?, cacheWriteTokens: Int, cacheWriteCost: Int, reducibleCost: Int
+    ) {
+        self.messageID = messageID
+        self.timestamp = timestamp
+        self.file = file
+        self.sessionID = sessionID
+        self.title = title
+        self.cause = cause
+        self.previousTimestamp = previousTimestamp
+        self.gapSeconds = gapSeconds
+        self.previousTTL = previousTTL
+        self.previousModel = previousModel
+        self.model = model
+        self.previousVersion = previousVersion
+        self.version = version
+        self.cacheWriteTokens = cacheWriteTokens
+        self.cacheWriteCost = cacheWriteCost
+        self.reducibleCost = reducibleCost
+    }
 }
 
 /// Usage in `[from, to)` broken down by cause. Costs are nano-USD at API list prices.
@@ -57,6 +103,7 @@ public struct UsageReport: Sendable, Equatable {
     public var shortBreak = BreakTotals()
     public var longBreak = BreakTotals()
     public var reducibleCost = 0
+    public var advisor = AdvisorTotals()
     public var rebuilds: [RebuildEvent] = []
     public var unpricedModels: [String: Int] = [:]
 
@@ -91,8 +138,31 @@ public final class UsageAnalyzer {
                 try indexer.timeline(of: file.url), kind: file.kind, from: from, to: to)
             for item in classified {
                 let call = item.call
-                let cost = prices.cost(of: call)
-                if !cost.known { report.unpricedModels[call.model, default: 0] += 1 }
+                // Each step at its own model (R10). Only the steps that rebuilt go to the rebuild's cause (R8).
+                var cost = CallCost(cacheWrite: 0, other: 0, writtenAsRead: 0, known: true)
+                var rebuilt = (cost: 0, tokens: 0, asRead: 0)
+                var unpriced = Set<String>()
+                var consulted = false
+                for part in call.parts {
+                    let model = part.model ?? call.model
+                    let partCost = prices.cost(of: part, model: model)
+                    if !partCost.known { unpriced.insert(model) }
+                    cost.cacheWrite += partCost.cacheWrite
+                    cost.other += partCost.other
+                    if part.kind == .advisor {
+                        consulted = true
+                        report.advisor.inputTokens += part.inputTokens
+                        report.advisor.outputTokens += part.outputTokens
+                        report.advisor.cost += partCost.total
+                    }
+                    if item.isRebuild, RebuildClassifier.isRebuild(part) {
+                        rebuilt.cost += partCost.cacheWrite
+                        rebuilt.tokens += part.cacheWriteTokens
+                        rebuilt.asRead += partCost.writtenAsRead
+                    }
+                }
+                if consulted { report.advisor.calls += 1 }
+                for model in unpriced { report.unpricedModels[model, default: 0] += 1 }
                 report.calls += 1
                 report.inputTokens += call.inputTokens
                 report.outputTokens += call.outputTokens
@@ -101,7 +171,7 @@ public final class UsageAnalyzer {
                 report.totalCost += cost.total
                 if item.isRebuild {
                     report.rebuildCount += 1
-                    report.rebuildTokens += call.cacheWriteTokens
+                    report.rebuildTokens += rebuilt.tokens
                 }
 
                 // R7: subagents take all of their cost; R8: a rebuild's write goes to its cause.
@@ -114,21 +184,21 @@ public final class UsageAnalyzer {
                     report.bucketCosts[.normalWork, default: 0] += cost.total
                     continue
                 }
-                report.bucketCosts[.normalWork, default: 0] += cost.other
-                report.bucketCosts[Self.bucket(of: cause), default: 0] += cost.cacheWrite
+                report.bucketCosts[.normalWork, default: 0] += cost.total - rebuilt.cost
+                report.bucketCosts[Self.bucket(of: cause), default: 0] += rebuilt.cost
                 report.mainRebuildCounts[cause, default: 0] += 1
                 var reducible = 0
                 switch cause {
                 case .expiredShortBreak:
-                    reducible = cost.cacheWrite - cost.writtenAsRead
+                    reducible = rebuilt.cost - rebuilt.asRead
                     report.reducibleCost += reducible
                     report.shortBreak.count += 1
-                    report.shortBreak.tokens += call.cacheWriteTokens
-                    report.shortBreak.cost += cost.cacheWrite
+                    report.shortBreak.tokens += rebuilt.tokens
+                    report.shortBreak.cost += rebuilt.cost
                 case .expiredLongBreak:
                     report.longBreak.count += 1
-                    report.longBreak.tokens += call.cacheWriteTokens
-                    report.longBreak.cost += cost.cacheWrite
+                    report.longBreak.tokens += rebuilt.tokens
+                    report.longBreak.cost += rebuilt.cost
                 default:
                     break
                 }
@@ -143,7 +213,7 @@ public final class UsageAnalyzer {
                         gapSeconds: item.previous.map { call.timestamp - $0.timestamp },
                         previousTTL: item.previousTTL, previousModel: item.previous?.model, model: call.model,
                         previousVersion: item.previous?.version, version: call.version,
-                        cacheWriteTokens: call.cacheWriteTokens, cacheWriteCost: cost.cacheWrite,
+                        cacheWriteTokens: rebuilt.tokens, cacheWriteCost: rebuilt.cost,
                         reducibleCost: reducible))
             }
         }
@@ -246,11 +316,18 @@ public enum ReportText {
             lines.append("  expired, \(pad(name, 12)) \(totals.count) calls, \(count(totals.tokens)) tokens")
         }
         lines.append("cost (API list)     \(money(report.totalCost))")
-        if report.totalCost > 0 {
+        if report.totalCost != 0 {
             for (bucket, label) in bucketLabels {
                 let cost = report.bucketCosts[bucket] ?? 0
                 lines.append(
                     "  \(pad(label, 27)) \(percent(Double(cost) / Double(report.totalCost), width: 6))  \(money(cost))")
+            }
+            let advisor = report.advisor
+            if advisor.calls > 0 {
+                lines.append(
+                    "advisor (in buckets) \(advisor.calls) calls, input=\(count(advisor.inputTokens)) "
+                        + "output=\(count(advisor.outputTokens)), \(money(advisor.cost)) "
+                        + "(\(percent(Double(advisor.cost) / Double(report.totalCost))) of cost)")
             }
             lines.append("menu bar (idle rebuilds) \(percent(report.idleRebuildShare))")
             lines.append("reducible (short breaks) \(percent(report.reducibleShare))")

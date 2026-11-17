@@ -26,9 +26,14 @@ public enum RebuildClassifier {
     /// A cache that expired after a gap of at most this long counts as a short break.
     public static let shortBreakLimit: Double = 3 * 3600
 
-    public static func isRebuild(_ call: CallRecord) -> Bool {
-        call.cacheWriteTokens >= rebuildThreshold && call.cacheWriteTokens > call.cacheReadTokens
+    /// Judged per step: a later step of the same call can read the new cache back, so the call's totals can
+    /// hide a rebuild. An advisor consult runs on its own model and never rebuilds the conversation's cache.
+    public static func isRebuild(_ part: UsagePart) -> Bool {
+        part.kind == .message && part.cacheWriteTokens >= rebuildThreshold
+            && part.cacheWriteTokens > part.cacheReadTokens
     }
+
+    public static func isRebuild(_ call: CallRecord) -> Bool { call.parts.contains { isRebuild($0) } }
 
     /// Walks one transcript in file order and classifies its owned calls in `[from, to)`.
     /// Every call, copied or outside the window, still becomes the context for the next one (R3).

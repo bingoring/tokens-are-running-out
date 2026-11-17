@@ -339,4 +339,53 @@ struct IndexerTests {
         #expect(try everything(reopened).calls == 2)
         #expect(try reopened.timeline(of: file).map(\.seq) == [0, 1])
     }
+
+    // MARK: - The final usage of a message
+
+    private func calls(_ indexer: Indexer, in file: URL) throws -> [CallRecord] {
+        try indexer.timeline(of: file).compactMap { event in
+            if case .call(let call, _) = event.kind { return call }
+            return nil
+        }
+    }
+
+    @Test("a message's usage comes from its last line and its place in the file from its first")
+    func lastLineUsage() throws {
+        let dir = try TempDir()
+        let file = try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", output: 10)
+                + Fixture.call(id: "m2", at: "2026-11-10T00:00:05Z", session: "s1", output: 1)
+                + Fixture.call(
+                    id: "m1", at: "2026-11-10T00:00:09Z", session: "s1", output: 500,
+                    iterations: [
+                        Fixture.iteration(input: 2, output: 500),
+                        Fixture.iteration(type: "advisor_message", model: "claude-fable-5-2", input: 9_000, output: 70),
+                    ]),
+            to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+
+        try indexer.indexAll()
+
+        #expect(try everything(indexer) == UsageTotals(calls: 2, inputTokens: 4, outputTokens: 501))
+        let found = try calls(indexer, in: file)
+        #expect(found.map(\.messageID) == ["m1", "m2"])
+        #expect(found.first?.timestamp == nov10)
+        #expect(found.first?.outputTokens == 500)
+        #expect(found.first?.iterations.count == 2)
+    }
+
+    @Test("a message's last line that arrives in a later scan updates the call")
+    func lastLineInLaterScan() throws {
+        let dir = try TempDir()
+        let file = try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", output: 10), to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+
+        try dir.append(Fixture.call(id: "m1", at: "2026-11-10T00:00:09Z", session: "s1", output: 500), to: file)
+        try indexer.update(paths: [file])
+
+        #expect(try everything(indexer) == UsageTotals(calls: 1, inputTokens: 2, outputTokens: 500))
+        #expect(try calls(indexer, in: file).first?.outputTokens == 500)
+    }
 }

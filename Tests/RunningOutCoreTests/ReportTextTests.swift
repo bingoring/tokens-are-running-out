@@ -39,4 +39,52 @@ struct ReportTextTests {
         ].joined(separator: "\n")
         #expect(text == expected)
     }
+
+    @Test("a full report prints every line in the prototype's format")
+    func fullReport() {
+        var report = UsageReport(from: 0, to: 1)
+        report.calls = 4_133
+        report.inputTokens = 1_234
+        report.outputTokens = 56_789
+        report.cacheReadTokens = 1_000_000
+        report.cacheWriteTokens = 200_000
+        report.rebuildCount = 5
+        report.rebuildTokens = 150_000
+        report.subagentRebuildCount = 1
+        report.mainRebuildCounts = [.expiredShortBreak: 2, .expiredLongBreak: 1, .afterCompaction: 1]
+        report.shortBreak = BreakTotals(count: 2, tokens: 70_000, cost: 100_000_000_000)
+        report.longBreak = BreakTotals(count: 1, tokens: 50_000, cost: 150_000_000_000)
+        report.totalCost = 1_000_000_000_000
+        report.bucketCosts = [
+            .normalWork: 600_000_000_000, .shortBreakRebuild: 100_000_000_000, .longBreakRebuild: 150_000_000_000,
+            .sessionStartAndCompaction: 50_000_000_000, .subagents: 90_000_000_000,
+            .modelChangeAndUpdate: 10_000_000_000, .unknown: 0,
+        ]
+        report.reducibleCost = 90_000_000_000
+        report.advisor = AdvisorTotals(calls: 3, inputTokens: 150_000, outputTokens: 2_400, cost: 200_000_000_000)
+        report.unpricedModels = ["claude-future-9": 2, "claude-a": 1]
+        let expected = [
+            "window              A .. B",
+            "api calls           4,133",
+            "tokens              input=1,234 output=56,789 cache_read=1,000,000 cache_write=200,000",
+            "rebuilds            5 calls, 150,000 tokens (75.0% of cache writes)",
+            "  in subagents      1",
+            "  in main sessions  4: expired 3, after compaction 1",
+            "  expired, short break  2 calls, 70,000 tokens",
+            "  expired, long break   1 calls, 50,000 tokens",
+            "cost (API list)     $1,000.00",
+            "  normal work                  60.0%  $600.00",
+            "  rebuild after short break    10.0%  $100.00",
+            "  rebuild after long break     15.0%  $150.00",
+            "  session start & compaction    5.0%  $50.00",
+            "  subagents                     9.0%  $90.00",
+            "  model change & update         1.0%  $10.00",
+            "  unknown                       0.0%  $0.00",
+            "advisor (in buckets) 3 calls, input=150,000 output=2,400, $200.00 (20.0% of cost)",
+            "menu bar (idle rebuilds) 25.0%",
+            "reducible (short breaks) 9.0%",
+            "unpriced models     claude-a x1, claude-future-9 x2",
+        ].joined(separator: "\n")
+        #expect(ReportText.render(report, fromText: "A", toText: "B") == expected)
+    }
 }

@@ -10,13 +10,15 @@ struct RebuildClassifierTests {
     /// A call event. `write` defaults to a rebuild-sized write with nothing read.
     private mutating func call(
         _ id: String, at ts: Double, model: String = "claude-opus-5-5", version: String = "2.1.325",
-        read: Int = 0, write: Int = 60_000, ttl: CacheTTL? = .oneHour, owned: Bool = true
+        read: Int = 0, write: Int = 60_000, ttl: CacheTTL? = .oneHour, owned: Bool = true,
+        iterations: [UsagePart] = []
     ) -> TimelineEvent {
         defer { seq += 1 }
         let record = CallRecord(
             messageID: id, timestamp: ts, model: model, version: version, lineSessionID: nil, inputTokens: 2,
             outputTokens: 10, cacheReadTokens: read, cacheWriteTokens: write,
-            cacheWrite1h: ttl == .oneHour ? write : 0, cacheWrite5m: ttl == .fiveMinutes ? write : 0, ttl: ttl)
+            cacheWrite1h: ttl == .oneHour ? write : 0, cacheWrite5m: ttl == .fiveMinutes ? write : 0, ttl: ttl,
+            iterations: iterations)
         return TimelineEvent(seq: seq, kind: .call(record, owned: owned))
     }
 
@@ -130,5 +132,53 @@ struct RebuildClassifierTests {
         let classified = RebuildClassifier.classify(events, kind: .subagent, from: 0, to: 1e12)
         #expect(classified.map(\.isRebuild) == [true, true])
         #expect(classified.allSatisfy { $0.cause == nil })
+    }
+
+    @Test("a call rebuilds when one of its iterations does, even if a later iteration reads the cache back")
+    mutating func rebuildPerIteration() {
+        let events = [
+            call(
+                "a", at: 0, read: 70_000, write: 60_300,
+                iterations: [
+                    UsagePart(cacheWriteTokens: 60_000, cacheWrite1h: 60_000),
+                    UsagePart(cacheReadTokens: 70_000, cacheWriteTokens: 300, cacheWrite1h: 300),
+                ])
+        ]
+        #expect(causes(events)["a"] == "sessionStart")
+    }
+
+    @Test("an advisor iteration never makes a rebuild")
+    mutating func advisorNeverRebuilds() {
+        let events = [
+            call(
+                "a", at: 0, write: 0,
+                iterations: [
+                    UsagePart(inputTokens: 2),
+                    UsagePart(kind: .advisor, model: "claude-fable-5-2", cacheWriteTokens: 60_000),
+                ])
+        ]
+        #expect(causes(events)["a"] == "-")
+    }
+
+    @Test("a compaction outranks a model change")
+    mutating func compactionBeforeModelChange() {
+        var events = [call("a", at: 0)]
+        events.append(compaction(at: 5))
+        events.append(call("b", at: 10, model: "claude-fable-5-2"))
+        #expect(causes(events)["b"] == "afterCompaction")
+    }
+
+    @Test("an expired cache outranks a version change")
+    mutating func expiryBeforeVersionChange() {
+        let events = [call("a", at: 0, version: "2.1.1"), call("b", at: 3_601, version: "2.1.2")]
+        #expect(causes(events)["b"] == "expiredShortBreak")
+    }
+
+    @Test("the window includes its start and excludes its end")
+    mutating func windowBounds() {
+        let events = [call("a", at: 100), call("b", at: 200)]
+        let found = causes(events, from: 100, to: 200)
+        #expect(found["a"] == "sessionStart")
+        #expect(found["b"] == nil)
     }
 }
