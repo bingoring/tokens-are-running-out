@@ -227,6 +227,23 @@ public final class Indexer {
         } ?? UsageTotals()
     }
 
+    /// Files that own at least one call in `[from, to)`, for analysis.
+    public func ownedFiles(from: Double, to: Double) throws -> [TranscriptRef] {
+        var refs: [TranscriptRef] = []
+        try db.query(
+            """
+            SELECT DISTINCT f.path, f.kind, f.session_id, f.agent_id
+            FROM calls c JOIN files f ON f.id = c.owner_file_id WHERE c.ts >= ? AND c.ts < ? ORDER BY f.path
+            """, [.double(from), .double(to)]
+        ) { s in
+            refs.append(
+                TranscriptRef(
+                    url: URL(fileURLWithPath: s.text(0)), kind: TranscriptKind(rawValue: s.text(1)) ?? .main,
+                    sessionID: s.text(2), agentID: s.optionalText(3)))
+        }
+        return refs
+    }
+
     /// The file whose copy of the call is counted (rule R4).
     public func owner(of messageID: String) throws -> URL? {
         try db.queryRow(
