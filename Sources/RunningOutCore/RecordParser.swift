@@ -65,8 +65,9 @@ public enum RecordParser {
 
     /// R2: only real API calls with an id, a timestamp and usage.
     private static func call(from raw: RawLine) -> CallRecord? {
-        guard let message = raw.message, let usage = message.usage,
-            let id = message.id, let model = message.model, model != "<synthetic>",
+        // Matches the prototype oracle: an empty usage object or an empty id is not a call.
+        guard let message = raw.message, let usage = message.usage, usage.keyCount > 0,
+            let id = message.id, !id.isEmpty, let model = message.model, !model.isEmpty, model != "<synthetic>",
             let timestamp = raw.timestamp.flatMap(Timestamp.parse)
         else { return nil }
 
@@ -136,6 +137,29 @@ private struct RawUsage: Decodable {
     var cache_read_input_tokens: Int?
     var cache_creation_input_tokens: Int?
     var cache_creation: RawCacheCreation?
+    /// How many keys the usage object had, known or not.
+    var keyCount = 0
+
+    enum CodingKeys: String, CodingKey {
+        case input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens, cache_creation
+    }
+
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    init(from decoder: Decoder) throws {
+        keyCount = try decoder.container(keyedBy: AnyKey.self).allKeys.count
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        input_tokens = try c.decodeIfPresent(Int.self, forKey: .input_tokens)
+        output_tokens = try c.decodeIfPresent(Int.self, forKey: .output_tokens)
+        cache_read_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_read_input_tokens)
+        cache_creation_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_creation_input_tokens)
+        cache_creation = try c.decodeIfPresent(RawCacheCreation.self, forKey: .cache_creation)
+    }
 }
 
 // swift-format-ignore: AlwaysUseLowerCamelCase

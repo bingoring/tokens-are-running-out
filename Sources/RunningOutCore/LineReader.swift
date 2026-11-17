@@ -28,8 +28,11 @@ public enum LineReader {
                     finished = true
                     return
                 }
+                // Only the new bytes can hold a newline we have not seen, so a very long line
+                // is scanned once, not again with every chunk.
+                let newBytes = carry.endIndex
                 carry.append(chunk)
-                guard let lastNewline = carry.lastIndex(of: newline) else { return }
+                guard let lastNewline = carry[newBytes...].lastIndex(of: newline) else { return }
 
                 var lineStart = carry.startIndex
                 while let end = carry[lineStart...lastNewline].firstIndex(of: newline) {

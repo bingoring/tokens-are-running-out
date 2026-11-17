@@ -5,6 +5,9 @@ public struct SQLiteError: Error, CustomStringConvertible {
     public let code: Int32
     public let message: String
     public var description: String { "SQLite error \(code): \(message)" }
+
+    /// The file is not a usable database and should be rebuilt.
+    var isCorruption: Bool { code == SQLITE_CORRUPT || code == SQLITE_NOTADB }
 }
 
 enum SQLValue {
@@ -19,6 +22,10 @@ enum SQLValue {
 }
 
 /// A thin wrapper over the SQLite3 C API that ships with macOS. Not thread-safe; use from one thread.
+///
+/// Statements are cached, and every helper resets its statement when it returns. A statement left
+/// mid-step keeps a read transaction open, which pins the WAL and makes later writes fail with
+/// "database is locked" once another connection has written.
 final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private var statements: [String: Statement] = [:]
@@ -31,6 +38,8 @@ final class SQLiteDatabase {
             sqlite3_close_v2(handle)
             throw SQLiteError(code: code, message: message)
         }
+        // Another process (the CLI next to the app) may hold the write lock briefly.
+        sqlite3_busy_timeout(handle, 5_000)
     }
 
     deinit {
@@ -43,27 +52,39 @@ final class SQLiteDatabase {
         guard code == SQLITE_OK else { throw error(code) }
     }
 
-    /// Returns a cached prepared statement, reset and ready to bind.
-    func statement(_ sql: String) throws -> Statement {
-        if let cached = statements[sql] {
-            cached.reset()
-            return cached
-        }
-        var raw: OpaquePointer?
-        let code = sqlite3_prepare_v2(handle, sql, -1, &raw, nil)
-        guard code == SQLITE_OK, let raw else { throw error(code) }
-        let statement = Statement(raw: raw, database: self)
-        statements[sql] = statement
-        return statement
+    /// Runs a statement to completion.
+    func run(_ sql: String, _ values: [SQLValue] = []) throws {
+        let statement = try prepared(sql)
+        defer { statement.reset() }
+        try statement.bind(values)
+        while try statement.step() {}
+    }
+
+    /// Reads the first row, if any.
+    func queryRow<T>(_ sql: String, _ values: [SQLValue] = [], _ read: (Statement) throws -> T) throws -> T? {
+        let statement = try prepared(sql)
+        defer { statement.reset() }
+        try statement.bind(values)
+        return try statement.step() ? read(statement) : nil
+    }
+
+    /// Calls `each` for every row. Do not run the same SQL again from inside `each`.
+    func query(_ sql: String, _ values: [SQLValue] = [], _ each: (Statement) throws -> Void) throws {
+        let statement = try prepared(sql)
+        defer { statement.reset() }
+        try statement.bind(values)
+        while try statement.step() { try each(statement) }
     }
 
     func transaction<T>(_ body: () throws -> T) throws -> T {
         try execute("BEGIN IMMEDIATE")
         do {
             let result = try body()
+            for statement in statements.values { statement.reset() }
             try execute("COMMIT")
             return result
         } catch {
+            for statement in statements.values { statement.reset() }
             try? execute("ROLLBACK")
             throw error
         }
@@ -74,6 +95,16 @@ final class SQLiteDatabase {
 
     func error(_ code: Int32) -> SQLiteError {
         SQLiteError(code: code, message: String(cString: sqlite3_errmsg(handle)))
+    }
+
+    private func prepared(_ sql: String) throws -> Statement {
+        if let cached = statements[sql] { return cached }
+        var raw: OpaquePointer?
+        let code = sqlite3_prepare_v2(handle, sql, -1, &raw, nil)
+        guard code == SQLITE_OK, let raw else { throw error(code) }
+        let statement = Statement(raw: raw, database: self)
+        statements[sql] = statement
+        return statement
     }
 }
 
@@ -94,8 +125,7 @@ final class Statement {
         sqlite3_clear_bindings(raw)
     }
 
-    @discardableResult
-    func bind(_ values: SQLValue...) throws -> Statement {
+    fileprivate func bind(_ values: [SQLValue]) throws {
         for (offset, value) in values.enumerated() {
             let index = Int32(offset + 1)
             let code: Int32
@@ -107,21 +137,16 @@ final class Statement {
             }
             guard code == SQLITE_OK else { throw database.error(code) }
         }
-        return self
     }
 
     /// Steps once. Returns true when a row is available.
-    func step() throws -> Bool {
+    fileprivate func step() throws -> Bool {
         let code = sqlite3_step(raw)
         switch code {
         case SQLITE_ROW: return true
         case SQLITE_DONE: return false
         default: throw database.error(code)
         }
-    }
-
-    func run() throws {
-        while try step() {}
     }
 
     func int(_ column: Int32) -> Int { Int(sqlite3_column_int64(raw, column)) }

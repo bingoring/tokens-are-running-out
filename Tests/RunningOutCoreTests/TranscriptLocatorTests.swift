@@ -45,8 +45,8 @@ struct TranscriptLocatorTests {
         try dir.write("{}", to: "projects/-p/s1/subagents/agent-x.meta.json")
         try dir.write(Fixture.user(), to: "projects/-q/s2.jsonl")
 
-        let refs = try TranscriptLocator.findAll(root: dir.url.appendingPathComponent("projects"))
-        let names = refs.map { $0.url.lastPathComponent }.sorted()
+        let scan = TranscriptLocator.findAll(root: dir.url.appendingPathComponent("projects"))
+        let names = scan.refs.map { $0.url.lastPathComponent }.sorted()
         #expect(names == ["agent-x.jsonl", "s1.jsonl", "s2.jsonl"])
     }
 }

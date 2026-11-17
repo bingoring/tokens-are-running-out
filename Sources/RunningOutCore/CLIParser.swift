@@ -42,6 +42,14 @@ public enum CLIParser {
         }
         let root = options["--root"].map { URL(fileURLWithPath: $0) } ?? defaultRoot(home: home)
         let database = options["--db"].map { URL(fileURLWithPath: $0) } ?? defaultDatabase(home: home)
+        // R9: the tool never writes into Claude Code's folder or the folder it reads.
+        let databasePath = database.standardizedFileURL.path
+        for forbidden in [home.appendingPathComponent(".claude"), root] {
+            let folder = forbidden.standardizedFileURL.path
+            if databasePath == folder || databasePath.hasPrefix(folder + "/") {
+                throw .usage("The index cannot live inside \(folder); it must stay read-only.")
+            }
+        }
 
         switch command {
         case "index":

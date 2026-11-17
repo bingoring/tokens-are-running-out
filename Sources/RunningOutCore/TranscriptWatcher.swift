@@ -3,14 +3,15 @@ import Foundation
 
 /// Watches the transcript root with FSEvents and reports changed paths in batches.
 ///
-/// `start()` and `stop()` must be called from one thread; the handler runs on a private queue.
-/// When FSEvents drops events (`MustScanSubDirs`), the handler receives the root so the caller
-/// rescans everything.
+/// The handler runs on a private queue. When FSEvents drops events (`MustScanSubDirs`), the handler
+/// receives the root so the caller rescans everything. While started, the stream keeps the watcher
+/// alive; call `stop()` to end it.
 public final class TranscriptWatcher: @unchecked Sendable {
     private let root: URL
     private let latency: TimeInterval
     private let handler: @Sendable ([URL]) -> Void
     private let queue = DispatchQueue(label: "TokensAreRunningOut.TranscriptWatcher")
+    private let lock = NSLock()
     private var stream: FSEventStreamRef?
 
     public init(root: URL, latency: TimeInterval = 0.5, handler: @escaping @Sendable ([URL]) -> Void) {
@@ -19,12 +20,22 @@ public final class TranscriptWatcher: @unchecked Sendable {
         self.handler = handler
     }
 
-    deinit { stop() }
-
     public func start() throws {
+        lock.lock()
+        defer { lock.unlock() }
         guard stream == nil else { return }
+        // The stream retains the watcher, so a callback can never outlive it.
         var context = FSEventStreamContext(
-            version: 0, info: Unmanaged.passUnretained(self).toOpaque(), retain: nil, release: nil,
+            version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: { info in
+                guard let info else { return nil }
+                _ = Unmanaged<TranscriptWatcher>.fromOpaque(info).retain()
+                return info
+            },
+            release: { info in
+                guard let info else { return }
+                Unmanaged<TranscriptWatcher>.fromOpaque(info).release()
+            },
             copyDescription: nil)
         let flags = FSEventStreamCreateFlags(
             kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer)
@@ -43,6 +54,8 @@ public final class TranscriptWatcher: @unchecked Sendable {
     }
 
     public func stop() {
+        lock.lock()
+        defer { lock.unlock() }
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)

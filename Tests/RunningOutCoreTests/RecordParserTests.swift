@@ -58,7 +58,8 @@ struct RecordParserTests {
     @Test("missing token fields and cache details default to zero with no TTL")
     func missingFieldsDefaultToZero() {
         let line = """
-            {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x","usage":{}}}
+            {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x",\
+            "usage":{"service_tier":"standard"}}}
             """
         guard case .call(let call) = parse(line) else {
             Issue.record("expected a call")
@@ -68,6 +69,16 @@ struct RecordParserTests {
         #expect(call.cacheWriteTokens == 0)
         #expect(call.ttl == nil)
         #expect(call.version == nil)
+    }
+
+    @Test("an empty usage object or an empty id is not an API call (matches the prototype)")
+    func emptyUsageOrID() {
+        let emptyUsage =
+            #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x","usage":{}}}"#
+        let emptyID =
+            #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"","model":"x","usage":{"output_tokens":1}}}"#
+        #expect(parse(emptyUsage) == .rejected)
+        #expect(parse(emptyID) == .rejected)
     }
 
     @Test("synthetic messages are not API calls")

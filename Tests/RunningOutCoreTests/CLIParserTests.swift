@@ -58,6 +58,13 @@ struct CLIParserTests {
         #expect(exitCode("index --root") == 2)
     }
 
+    @Test("an index path inside ~/.claude or inside the root is refused (read-only rule R9)")
+    func databaseInsideClaudeRefused() {
+        #expect(exitCode("index --db /Users/someone/.claude/index.sqlite") == 2)
+        #expect(exitCode("index --root /r --db /r/sub/index.sqlite") == 2)
+        #expect(exitCode("index --root /r --db /rr/index.sqlite") == nil)
+    }
+
     @Test("watch accepts the same path options as index")
     func watch() throws {
         #expect(
