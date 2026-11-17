@@ -83,7 +83,7 @@ def iter_calls(path):
                 continue
             m = o.get("message") or {}
             u = m.get("usage") or {}
-            if not u or not m.get("id") or m.get("model") == "<synthetic>":
+            if not u or not m.get("id") or not m.get("model") or m.get("model") == "<synthetic>":
                 continue
             yield m, u, o
 
@@ -101,9 +101,11 @@ def owners(files):
         is_sub = "/subagents/" in path
         file_sid = os.path.basename(path)[:-6]
         born = os.stat(path).st_birthtime
+        seen = set()
         for m, _, o in iter_calls(path):
-            if m is None:
+            if m is None or m["id"] in seen:
                 continue
+            seen.add(m["id"])  # the first line of a message in a file decides its rank
             key = (0 if (not is_sub and o.get("sessionId") == file_sid) else 1, born, path)
             mid = m["id"]
             if mid not in best or key < best[mid]:
@@ -119,7 +121,7 @@ def main():
     a = p.parse_args()
     lo, hi = iso(a.lo), iso(a.hi)
 
-    files = glob.glob(f"{a.root}/*/*.jsonl") + glob.glob(f"{a.root}/*/*/subagents/*.jsonl")
+    files = glob.glob(f"{a.root}/*/*.jsonl") + glob.glob(f"{a.root}/*/*/subagents/agent-*.jsonl")
     calls = 0
     tokens = collections.Counter()
     total_cost = 0.0
