@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build app and tests (warnings are errors)
+        run: swift build --build-tests -Xswiftc -warnings-as-errors
+
+      - name: Test
+        run: swift test
+
+      - name: Lint
+        run: swift format lint --strict --recursive Sources Tests Package.swift
+
+      - name: No network APIs in the app (anti-goal)
+        run: |
+          if grep -rnE 'URLSession|NSURLConnection|CFNetwork|import Network|socket\(|contentsOf: *URL\(string' Sources; then
+            echo "Network APIs are not allowed in Sources/." >&2
+            exit 1
+          fi
+
+      - name: Transcripts are only read (rule R9)
+        run: |
+          if grep -rnE 'forWritingTo|forUpdating|\.write\(to|createFile\(|removeItem\(' Sources \
+              | grep -v 'Indexer.swift:.*databaseURL.path'; then
+            echo "Sources/ may only write the index database." >&2
+            exit 1
+          fi
+
+      - name: No real transcripts or indexes committed
+        run: |
+          if git ls-files | grep -E '\.(jsonl|sqlite)$'; then
+            echo "Real transcripts or index files must not be committed." >&2
+            exit 1
+          fi
+
+      - name: No merge commits from the base (rebase only)
+        if: github.event_name == 'pull_request'
+        run: |
+          merges=$(git log --merges --oneline "origin/${{ github.base_ref }}..HEAD^2" 2>/dev/null || true)
+          if [ -n "$merges" ]; then
+            echo "$merges"
+            echo "Rebase on the base branch instead of merging it in." >&2
+            exit 1
+          fi

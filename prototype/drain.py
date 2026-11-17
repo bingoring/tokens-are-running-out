@@ -67,20 +67,23 @@ def iter_calls(path):
     """Yield (message, usage, record) for real assistant API calls, in file order."""
     with open(path, "rb") as fh:
         for line in fh:
-            if b"compact_boundary" in line:
-                yield None, None, {"compact": True}
-                continue
-            if b'"usage"' not in line or b'"assistant"' not in line:
+            maybe_compact = b"compact_boundary" in line
+            maybe_call = b'"usage"' in line and b'"assistant"' in line
+            if not (maybe_compact or maybe_call):
                 continue
             try:
                 o = json.loads(line)
             except ValueError:
                 continue
+            # The words can also appear inside message text, so check the record itself.
+            if o.get("type") == "system" and o.get("subtype") == "compact_boundary":
+                yield None, None, {"compact": True}
+                continue
             if o.get("type") != "assistant" or not o.get("timestamp"):
                 continue
             m = o.get("message") or {}
             u = m.get("usage") or {}
-            if not u or not m.get("id") or m.get("model") == "<synthetic>":
+            if not u or not m.get("id") or not m.get("model") or m.get("model") == "<synthetic>":
                 continue
             yield m, u, o
 
@@ -98,9 +101,11 @@ def owners(files):
         is_sub = "/subagents/" in path
         file_sid = os.path.basename(path)[:-6]
         born = os.stat(path).st_birthtime
+        seen = set()
         for m, _, o in iter_calls(path):
-            if m is None:
+            if m is None or m["id"] in seen:
                 continue
+            seen.add(m["id"])  # the first line of a message in a file decides its rank
             key = (0 if (not is_sub and o.get("sessionId") == file_sid) else 1, born, path)
             mid = m["id"]
             if mid not in best or key < best[mid]:
@@ -116,7 +121,7 @@ def main():
     a = p.parse_args()
     lo, hi = iso(a.lo), iso(a.hi)
 
-    files = glob.glob(f"{a.root}/*/*.jsonl") + glob.glob(f"{a.root}/*/*/subagents/*.jsonl")
+    files = glob.glob(f"{a.root}/*/*.jsonl") + glob.glob(f"{a.root}/*/*/subagents/agent-*.jsonl")
     calls = 0
     tokens = collections.Counter()
     total_cost = 0.0
