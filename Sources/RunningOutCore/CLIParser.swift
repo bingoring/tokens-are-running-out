@@ -74,9 +74,10 @@ public enum CLIParser {
         }
     }
 
-    /// Accepts only full UTC timestamps such as `2026-11-10T00:00:00Z`.
+    /// Accepts only full UTC timestamps in whole seconds, such as `2026-11-10T00:00:00Z`, so the window
+    /// printed back is exactly the window given.
     private static func strictUTC(_ text: String) -> Double? {
-        guard text.hasSuffix("Z"), text.contains("T") else { return nil }
+        guard text.wholeMatch(of: #/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/#) != nil else { return nil }
         return Timestamp.parse(text)
     }
 }
