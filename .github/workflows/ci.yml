@@ -30,6 +30,14 @@ jobs:
       - name: Lint
         run: swift format lint --strict --recursive Sources Tests Package.swift
 
+      - name: Same report as the prototype on synthetic fixtures
+        run: prototype/parity.sh
+
+      - name: Embedded price table is current
+        run: |
+          python3 -I scripts/embed-pricing.py
+          git diff --exit-code Sources/RunningOutCore/PricingData.swift
+
       - name: No network APIs in the app (anti-goal)
         run: |
           if grep -rnE 'URLSession|NSURLConnection|CFNetwork|import Network|socket\(|contentsOf: *URL\(string' Sources; then

@@ -12,6 +12,6 @@ let package = Package(
         // pricing.json is embedded as Swift by scripts/embed-pricing.py, so no resource bundle is needed.
         .target(name: "RunningOutCore", exclude: ["Resources/pricing.json"]),
         .executableTarget(name: "running-out", dependencies: ["RunningOutCore"]),
-        .testTarget(name: "RunningOutCoreTests", dependencies: ["RunningOutCore"]),
+        .testTarget(name: "RunningOutCoreTests", dependencies: ["RunningOutCore"], exclude: ["Fixtures"]),
     ]
 )
