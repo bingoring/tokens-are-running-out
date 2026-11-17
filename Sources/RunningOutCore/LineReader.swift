@@ -19,18 +19,27 @@ public enum LineReader {
 
         var consumed = offset
         var carry = Data()
-        while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
-            carry.append(chunk)
-            guard let lastNewline = carry.lastIndex(of: newline) else { continue }
+        var finished = false
+        while !finished {
+            // Foundation objects made while reading and parsing are freed per chunk,
+            // not at the end of a file that can be hundreds of megabytes.
+            try autoreleasepool {
+                guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                    finished = true
+                    return
+                }
+                carry.append(chunk)
+                guard let lastNewline = carry.lastIndex(of: newline) else { return }
 
-            var lineStart = carry.startIndex
-            while let end = carry[lineStart...lastNewline].firstIndex(of: newline) {
-                try body(carry[lineStart..<end])
-                lineStart = carry.index(after: end)
-                if lineStart > lastNewline { break }
+                var lineStart = carry.startIndex
+                while let end = carry[lineStart...lastNewline].firstIndex(of: newline) {
+                    try body(carry[lineStart..<end])
+                    lineStart = carry.index(after: end)
+                    if lineStart > lastNewline { break }
+                }
+                consumed += UInt64(carry.distance(from: carry.startIndex, to: lineStart))
+                carry = Data(carry[lineStart...])
             }
-            consumed += UInt64(carry.distance(from: carry.startIndex, to: lineStart))
-            carry = Data(carry[lineStart...])
         }
         return consumed
     }
