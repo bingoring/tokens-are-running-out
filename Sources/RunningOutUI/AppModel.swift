@@ -474,8 +474,13 @@ public final class AppModel {
         } else if tickTask == nil {
             tickTask = Task { [weak self] in
                 while !Task.isCancelled {
-                    let seconds = 60 - Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 60)
-                    try? await Task.sleep(for: .seconds(seconds + 0.05))
+                    // Wake at the next whole minute, or sooner when a warned cache expires before it,
+                    // so an expired warning disappears at once rather than up to a minute later.
+                    let current = Date().timeIntervalSince1970
+                    let nextMinute = current - current.truncatingRemainder(dividingBy: 60) + 60
+                    let nextExpiry = self?.warnings.map(\.expiresAt).filter { $0 > current }.min()
+                    let wake = min(nextMinute, nextExpiry ?? nextMinute)
+                    try? await Task.sleep(for: .seconds(wake - current + 0.05))
                     guard let self, !Task.isCancelled else { return }
                     await self.minuteTick()
                 }
