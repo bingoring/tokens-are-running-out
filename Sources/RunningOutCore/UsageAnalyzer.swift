@@ -63,12 +63,14 @@ public struct RebuildEvent: Sendable, Equatable {
     public var reducibleCost: Int
     /// The context of the call before the rebuild: what was cached when the break began.
     public var previousContextTokens: Int?
+    /// False when a model of the call is missing from the price table and the cost is an estimate.
+    public var priced: Bool
 
     public init(
         messageID: String, timestamp: Double, file: URL, sessionID: String, title: String?, cause: RebuildCause,
         previousTimestamp: Double?, gapSeconds: Double?, previousTTL: CacheTTL, previousModel: String?, model: String,
         previousVersion: String?, version: String?, cacheWriteTokens: Int, cacheWriteCost: Int, reducibleCost: Int,
-        previousContextTokens: Int? = nil
+        previousContextTokens: Int? = nil, priced: Bool = true
     ) {
         self.messageID = messageID
         self.timestamp = timestamp
@@ -87,6 +89,7 @@ public struct RebuildEvent: Sendable, Equatable {
         self.cacheWriteCost = cacheWriteCost
         self.reducibleCost = reducibleCost
         self.previousContextTokens = previousContextTokens
+        self.priced = priced
     }
 }
 
@@ -225,7 +228,8 @@ public final class UsageAnalyzer {
                         previousTTL: item.previousTTL, previousModel: item.previous?.model, model: call.model,
                         previousVersion: item.previous?.version, version: call.version,
                         cacheWriteTokens: rebuilt.tokens, cacheWriteCost: rebuilt.cost,
-                        reducibleCost: reducible, previousContextTokens: item.previous?.contextTokens))
+                        reducibleCost: reducible, previousContextTokens: item.previous?.contextTokens,
+                        priced: unpriced.isEmpty))
             }
         }
         report.rebuilds.sort { ($0.timestamp, $0.messageID) < ($1.timestamp, $1.messageID) }

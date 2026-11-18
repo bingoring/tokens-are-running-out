@@ -60,6 +60,11 @@ public struct SessionRegistry {
         home.appendingPathComponent(".claude/sessions")
     }
 
+    /// `~/.claude/sessions` for the transcripts root `~/.claude/projects`.
+    public static func directory(besideRoot root: URL) -> URL {
+        root.deletingLastPathComponent().appendingPathComponent("sessions")
+    }
+
     public func load() -> RegistryState {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
             return .unavailable
@@ -100,19 +105,24 @@ public struct SessionRegistry {
 
 public enum ProcessProbe {
     /// True when `pid` is a running process and, if `startedAt` is known, it started then (within 2 seconds).
+    /// `startedAt` is a `procStart` read as UTC; a local-time `procStart` also matches, so a change of zone
+    /// in Claude Code cannot silently drop every running session.
     public static func isAlive(pid: Int32, startedAt: Double?) -> Bool {
         guard kill(pid, 0) == 0 || errno == EPERM else { return false }
         guard let startedAt else { return true }
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.stride
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return true }
+        // No answer means the process is gone by now (2-3 business-logic-model §6).
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return false }
         let started = info.kp_proc.p_un.__p_starttime
         let seconds = Double(started.tv_sec) + Double(started.tv_usec) / 1_000_000
-        return abs(seconds - startedAt) < 2
+        let localOffset = Double(TimeZone.current.secondsFromGMT(for: Date(timeIntervalSince1970: startedAt)))
+        return abs(seconds - startedAt) < 2 || abs(seconds - (startedAt - localOffset)) < 2
     }
 
-    /// Claude Code writes `procStart` like `ps -o lstart` ("Tue Nov 17 12:03:11 2026"), in UTC.
+    /// Claude Code writes `procStart` like `ps -o lstart` ("Tue Nov 17 12:03:11 2026"), in UTC (checked on
+    /// 2026-11-18: every running session was exactly the local UTC offset away from `ps`).
     public static func parseStartTime(_ text: String) -> Double? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

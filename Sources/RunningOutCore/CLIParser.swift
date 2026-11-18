@@ -76,7 +76,12 @@ public enum CLIParser {
                 throw .usage("Use ISO 8601 UTC, e.g. 2026-11-10T00:00:00Z.")
             }
             guard from < to else { throw .usage("--from must be earlier than --to.") }
-            if command == "stats" { return .stats(root: root, database: database, from: from, to: to) }
+            if command == "stats" {
+                guard options["--rebuild-threshold"] == nil else {
+                    throw .usage("--rebuild-threshold applies to report only.")
+                }
+                return .stats(root: root, database: database, from: from, to: to)
+            }
             var threshold = RebuildClassifier.rebuildThreshold
             if let text = options["--rebuild-threshold"] {
                 guard let value = Int(text), value >= 1 else {

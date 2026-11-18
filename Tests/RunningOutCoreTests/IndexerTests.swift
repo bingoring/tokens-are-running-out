@@ -431,7 +431,7 @@ struct IndexerTests {
         try indexer.indexAll()
         let health = try indexer.health(now: nov10 + 86_400)
         #expect(health.kind == .none)
-        #expect(health.assistantWithoutCall == 1)
+        #expect(health.assistantWithoutCall == 0)
     }
 
     @Test("assistant lines older than seven days do not count, so old history never raises the banner")
@@ -514,5 +514,79 @@ struct IndexerTests {
         try indexer.indexAll { seen.append($0) }
         #expect(seen.allSatisfy { !$0.isInitial })
         #expect(seen.last?.bytesTotal == 0)
+    }
+
+    private func lines(_ count: Int, broken: Int, synthetic: Int = 0) -> String {
+        var text = ""
+        for n in 0..<count {
+            let at = "2026-11-10T\(String(format: "%02d", n / 60)):\(String(format: "%02d", n % 60)):00Z"
+            text += assistantLine("m\(n)", at: at, usageKey: n < broken ? "usage_v2" : "usage")
+        }
+        for n in 0..<synthetic {
+            text +=
+                #"{"type":"assistant","timestamp":"2026-11-10T09:00:00Z","message":{"id":"x\#(n)","model":"<synthetic>","usage":{"output_tokens":0}}}"#
+                + "\n"
+        }
+        return text
+    }
+
+    private func health(of text: String) throws -> IndexHealth {
+        let dir = try TempDir()
+        try dir.write(text, to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        return try indexer.health(now: nov10 + 86_400)
+    }
+
+    @Test("the unreadable-lines rule needs 50 assistant lines and more than 5% of them broken")
+    func unreadableBoundaries() throws {
+        #expect(try health(of: lines(49, broken: 49)).kind == .none)
+        #expect(try health(of: lines(50, broken: 50)).kind == .unreadableLines(share: 1))
+        #expect(try health(of: lines(100, broken: 5)).kind == .none)
+        #expect(try health(of: lines(100, broken: 6)).kind == .unreadableLines(share: 0.06))
+    }
+
+    @Test("synthetic messages, even many of them, are not a format change")
+    func manySynthetic() throws {
+        let found = try health(of: lines(140, broken: 0, synthetic: 10))
+        #expect(found.kind == .none)
+        #expect(found.assistantWithoutCall == 0)
+    }
+
+    @Test("the no-calls rule needs 200 appended lines on one day")
+    func noCallsBoundary() throws {
+        for (count, expected) in [(199, IndexHealth.Kind.none), (200, .noCalls)] {
+            let dir = try TempDir()
+            let file = try dir.write(
+                Fixture.call(id: "m0", at: "2026-11-10T00:00:00Z", session: "s1"), to: "projects/-p/s1.jsonl")
+            let indexer = try makeIndexer(dir)
+            try indexer.indexAll()
+            var appended = ""
+            for n in 0..<count { appended += #"{"type":"reply","id":"r\#(n)"}"# + "\n" }
+            try dir.append(appended, to: file)
+            try indexer.update(paths: [file])
+            #expect(try indexer.health(now: Date().timeIntervalSince1970).kind == expected, "\(count)")
+        }
+    }
+
+    @Test("a call earlier in the week does not hide a day of appended lines without calls")
+    func noCallsPerDay() throws {
+        let dir = try TempDir()
+        let file = try dir.write(
+            Fixture.call(id: "m0", at: "2026-11-10T00:00:00Z", session: "s1"), to: "projects/-p/s1.jsonl")
+        var now = nov10
+        let indexer = try Indexer(
+            root: dir.url.appendingPathComponent("projects"),
+            databaseURL: dir.url.appendingPathComponent("index.sqlite"), clock: { now })
+        try indexer.indexAll()
+        // Calls appended on one day, then three days later a day of lines without calls.
+        try dir.append(Fixture.call(id: "m1", at: "2026-11-10T01:00:00Z", session: "s1"), to: file)
+        try indexer.update(paths: [file])
+        now += 3 * 86_400
+        var appended = ""
+        for n in 0..<200 { appended += #"{"type":"reply","id":"r\#(n)"}"# + "\n" }
+        try dir.append(appended, to: file)
+        try indexer.update(paths: [file])
+        #expect(try indexer.health(now: now).kind == .noCalls)
     }
 }

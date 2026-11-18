@@ -110,4 +110,30 @@ struct SessionRegistryTests {
         #expect(ProcessProbe.isAlive(pid: pid, startedAt: nil))
         #expect(!ProcessProbe.isAlive(pid: pid, startedAt: 1_000_000_000))
     }
+
+    @Test("a start time written in UTC or in local time both match the running process")
+    func startTimeInEitherZone() throws {
+        // `ps -o lstart` prints this process's start in local time, in the same shape as `procStart`.
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-o", "lstart=", "-p", String(getpid())]
+        let pipe = Pipe()
+        ps.standardOutput = pipe
+        try ps.run()
+        ps.waitUntilExit()
+        let local = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedAsUTC = try #require(ProcessProbe.parseStartTime(local))
+        #expect(ProcessProbe.isAlive(pid: getpid(), startedAt: parsedAsUTC))
+        // The same instant written in UTC, as Claude Code writes it.
+        let offset = Double(TimeZone.current.secondsFromGMT(for: Date(timeIntervalSince1970: parsedAsUTC)))
+        #expect(ProcessProbe.isAlive(pid: getpid(), startedAt: parsedAsUTC - offset))
+    }
+
+    @Test("the sessions folder sits beside the transcripts root")
+    func folderBesideRoot() {
+        #expect(
+            SessionRegistry.directory(besideRoot: URL(fileURLWithPath: "/u/.claude/projects"))
+                == URL(fileURLWithPath: "/u/.claude/sessions"))
+    }
 }

@@ -145,8 +145,10 @@ public enum RecordParser {
     /// R2: only real API calls with an id, a timestamp and usage.
     private static func call(from raw: RawLine) -> ParsedLine {
         // Matches the prototype oracle: an empty usage object or an empty id is not a call.
+        // Synthetic messages (API errors, limit replies) are known records, not a sign of a format change.
+        if raw.message?.model == "<synthetic>" { return .rejected }
         guard let message = raw.message, let usage = message.usage, usage.keyCount > 0,
-            let id = message.id, !id.isEmpty, let model = message.model, !model.isEmpty, model != "<synthetic>",
+            let id = message.id, !id.isEmpty, let model = message.model, !model.isEmpty,
             let timestamp = raw.timestamp.flatMap(Timestamp.parse)
         else { return .assistantWithoutCall(timestamp: raw.timestamp.flatMap(Timestamp.parse)) }
 

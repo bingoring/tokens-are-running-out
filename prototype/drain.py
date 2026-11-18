@@ -106,10 +106,10 @@ def rebuilt(kind, step, threshold=THRESHOLD):
 
 
 def positive_int(text):
-    value = int(text)
-    if value < 1:
-        raise argparse.ArgumentTypeError("must be 1 or more")
-    return value
+    # Digits only, like the app's CLI: no signs, spaces or underscores.
+    if not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError("must be a whole number of tokens, 1 or more")
+    return int(text)
 
 
 class Pricing:

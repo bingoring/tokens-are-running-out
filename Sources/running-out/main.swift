@@ -94,8 +94,7 @@ func run(_ command: CLICommand) async throws {
         // Counts and numbers only: session titles stay off the terminal.
         let service = openService(root: root, database: database)
         _ = report(try await service.indexAll())
-        let registry = SessionRegistry(
-            directory: SessionRegistry.defaultDirectory(home: FileManager.default.homeDirectoryForCurrentUser))
+        let registry = SessionRegistry(directory: SessionRegistry.directory(besideRoot: root))
         let state = registry.load()
         switch state {
         case .unavailable:
@@ -110,7 +109,7 @@ func run(_ command: CLICommand) async throws {
             print(
                 "warning                    \(Int(((warning.expiresAt - now) / 60).rounded(.up))) min left, "
                     + "context \(grouped(warning.contextTokens)), \(ReportText.money(warning.rebuildCost)), "
-                    + "ttl \(warning.ttl.rawValue), status \(warning.statusKnown ? "idle" : "unknown")")
+                    + "ttl \(warning.ttl.rawValue), status \(warning.status)")
         }
 
     case .watch(let root, let database):

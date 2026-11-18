@@ -231,4 +231,15 @@ struct UsageAnalyzerTests {
         #expect(report.rebuilds.first { $0.messageID == "m3" }?.previousContextTokens == 60_100)
         #expect(report.rebuilds.first { $0.messageID == "m1" }?.previousContextTokens == nil)
     }
+
+    @Test("a rebuild priced with the fallback says so")
+    func unpricedRebuild() throws {
+        let dir = try TempDir()
+        try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", model: "claude-future-9", write: 60_000),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.rebuilds.first?.priced == false)
+        #expect(report.unpricedModels == ["claude-future-9": 1])
+    }
 }

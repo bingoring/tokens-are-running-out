@@ -112,8 +112,12 @@ public final class Indexer {
     /// Bytes at the start of a file that are fingerprinted to notice in-place rewrites.
     private static let headLimit = 1024
 
-    public init(root: URL, databaseURL: URL) throws {
+    /// Seconds since 1970; the day new lines were read counts toward the format-change check.
+    private let clock: () -> Double
+
+    public init(root: URL, databaseURL: URL, clock: @escaping () -> Double = { Date().timeIntervalSince1970 }) throws {
         self.root = TranscriptLocator.canonical(root)
+        self.clock = clock
         try FileManager.default.createDirectory(
             at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         do {
@@ -165,7 +169,7 @@ public final class Indexer {
             }
         }
         progress?(report)
-        try db.run("DELETE FROM read_stats WHERE day < ?", [.int(Indexer.day(Date().timeIntervalSince1970) - 30)])
+        try db.run("DELETE FROM read_stats WHERE day < ?", [.int(Indexer.day(clock()) - 30)])
         try db.run(
             "INSERT OR REPLACE INTO meta(key, value) VALUES('last_full_index_at', ?)",
             [.text(String(Date().timeIntervalSince1970))])
@@ -241,7 +245,7 @@ public final class Indexer {
             var candidates = 0
             var failures = 0
             var unsettled = Set<String>()
-            let now = Date().timeIntervalSince1970
+            let now = clock()
             // Format-change evidence (BR-H1): assistant lines by their own day, appended lines by today.
             var assistantByDay: [Int: (lines: Int, withoutCall: Int)] = [:]
             var callsAppended = 0
@@ -385,9 +389,11 @@ public final class Indexer {
         return events.sorted { $0.seq < $1.seq }
     }
 
-    /// Format-change check over the last seven days (2-3 BR-H1).
+    /// Format-change check (2-3 BR-H1): assistant lines over the last seven days, appended lines per day over
+    /// the last two days, so one earlier call cannot hide a day of lines without calls.
     public func health(now: Double = Date().timeIntervalSince1970) throws -> IndexHealth {
-        let since = Indexer.day(now) - 7
+        let today = Indexer.day(now)
+        let since = today - 6
         var health = IndexHealth()
         try db.query(
             "SELECT COALESCE(SUM(assistant_lines), 0), COALESCE(SUM(assistant_without_call), 0) FROM read_stats "
@@ -396,18 +402,20 @@ public final class Indexer {
             health.assistantLines = $0.int(0)
             health.assistantWithoutCall = $0.int(1)
         }
+        var dayWithoutCalls = false
         try db.query(
             """
-            SELECT COALESCE(SUM(r.lines_appended), 0), COALESCE(SUM(r.calls_appended), 0)
-            FROM read_stats r JOIN files f ON f.id = r.file_id WHERE f.kind = 'main' AND r.day >= ?
-            """, [.int(since)]
+            SELECT r.day, SUM(r.lines_appended), SUM(r.calls_appended)
+            FROM read_stats r JOIN files f ON f.id = r.file_id WHERE f.kind = 'main' AND r.day >= ? GROUP BY r.day
+            """, [.int(today - 1)]
         ) {
-            health.mainLinesAppended = $0.int(0)
-            health.mainCallsAppended = $0.int(1)
+            health.mainLinesAppended += $0.int(1)
+            health.mainCallsAppended += $0.int(2)
+            if $0.int(1) >= 200, $0.int(2) == 0 { dayWithoutCalls = true }
         }
         if health.assistantLines >= 50, health.assistantWithoutCall * 20 > health.assistantLines {
             health.kind = .unreadableLines(share: Double(health.assistantWithoutCall) / Double(health.assistantLines))
-        } else if health.mainLinesAppended >= 200, health.mainCallsAppended == 0 {
+        } else if dayWithoutCalls {
             health.kind = .noCalls
         }
         return health

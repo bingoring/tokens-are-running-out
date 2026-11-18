@@ -146,7 +146,7 @@ struct ExpiryWarningRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SessionTitle(title: warning.title)
                 Spacer(minLength: 8)
-                if warning.statusKnown {
+                if warning.status == .idle {
                     Label {
                         minutes == 0
                             ? Text("Less than a minute left", bundle: .module)
@@ -162,9 +162,13 @@ struct ExpiryWarningRow: View {
                         Image(systemName: "questionmark.circle")
                     }
                     .help(
-                        Text(
-                            "Claude Code's running-session files can't be read, so this session may already be busy.",
-                            bundle: .module))
+                        warning.status == .unreadable
+                            ? Text(
+                                "Claude Code's running-session files can't be read, so this session may already be busy.",
+                                bundle: .module)
+                            : Text(
+                                "Claude Code reports a status this version doesn't know, so this session may already be busy.",
+                                bundle: .module))
                 }
             }
             if showsAdvice {

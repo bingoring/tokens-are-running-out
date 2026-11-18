@@ -114,4 +114,10 @@ struct CLIParserTests {
             try parse("sessions --root /r --db /d.sqlite")
                 == .sessions(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
     }
+
+    @Test("the rebuild threshold belongs to report only")
+    func thresholdOnlyForReport() {
+        #expect(
+            exitCode("stats --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z --rebuild-threshold 30000") == 2)
+    }
 }

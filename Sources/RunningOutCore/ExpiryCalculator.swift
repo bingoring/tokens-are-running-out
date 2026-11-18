@@ -14,12 +14,20 @@ public struct ExpiryWarning: Sendable, Equatable {
     public var model: String
     /// False when the model is missing from the price table and was priced as the fallback.
     public var priced: Bool
-    /// False when the running-session files could not confirm the session is idle.
-    public var statusKnown: Bool
+    public enum Status: Sendable, Equatable {
+        /// The running-session file says the session is idle.
+        case idle
+        /// The running-session file has a status this version does not know.
+        case unknownStatus
+        /// The running-session files could not be read.
+        case unreadable
+    }
+
+    public var status: Status
 
     public init(
         sessionID: String, title: String?, expiresAt: Double, ttl: CacheTTL, contextTokens: Int, rebuildCost: Int,
-        model: String, priced: Bool, statusKnown: Bool
+        model: String, priced: Bool, status: Status
     ) {
         self.sessionID = sessionID
         self.title = title
@@ -29,7 +37,7 @@ public struct ExpiryWarning: Sendable, Equatable {
         self.rebuildCost = rebuildCost
         self.model = model
         self.priced = priced
-        self.statusKnown = statusKnown
+        self.status = status
     }
 }
 
@@ -41,16 +49,22 @@ public enum ExpiryCalculator {
         registry: RegistryState, now: Double, warningContextTokens: Int, prices: PriceTable,
         lastCall: (String) throws -> LastCall?, sessionsWithCallsSince: (Double) throws -> [String]
     ) throws -> [ExpiryWarning] {
-        var candidates: [(session: RunningSession?, statusKnown: Bool, sessionID: String)] = []
+        var candidates: [(session: RunningSession?, status: ExpiryWarning.Status, sessionID: String)] = []
         switch registry {
         case .available(let sessions):
+            // Two processes can resume one session: warn once, preferring the one known to be idle.
+            var byID: [String: RunningSession] = [:]
             for session in sessions where session.status != .busy {
-                candidates.append((session, session.status == .idle, session.sessionID))
+                if let kept = byID[session.sessionID], kept.status == .idle { continue }
+                byID[session.sessionID] = session
+            }
+            for session in byID.values {
+                candidates.append((session, session.status == .idle ? .idle : .unknownStatus, session.sessionID))
             }
         case .unavailable:
             // Any main session whose last call may still be cached (TTLs are at most one hour).
             for sessionID in try sessionsWithCallsSince(now - CacheTTL.oneHour.seconds) {
-                candidates.append((nil, false, sessionID))
+                candidates.append((nil, .unreadable, sessionID))
             }
         }
         var warnings: [ExpiryWarning] = []
@@ -66,7 +80,7 @@ public enum ExpiryCalculator {
                     sessionID: candidate.sessionID, title: last.title ?? candidate.session?.name ?? folder,
                     expiresAt: expiresAt, ttl: last.ttl, contextTokens: last.contextTokens,
                     rebuildCost: last.contextTokens * writePrice, model: last.model, priced: known,
-                    statusKnown: candidate.statusKnown))
+                    status: candidate.status))
         }
         return warnings.sorted { ($0.expiresAt, $0.sessionID) < ($1.expiresAt, $1.sessionID) }
     }

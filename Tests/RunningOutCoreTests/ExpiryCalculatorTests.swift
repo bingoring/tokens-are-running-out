@@ -44,7 +44,7 @@ struct ExpiryCalculatorTests {
                 ExpiryWarning(
                     sessionID: "s1", title: "Refactor parser", expiresAt: now + 3000, ttl: .oneHour,
                     contextTokens: 120_000, rebuildCost: 120_000 * 8000, model: "claude-opus-5-5", priced: true,
-                    statusKnown: true)
+                    status: .idle)
             ])
     }
 
@@ -64,14 +64,14 @@ struct ExpiryCalculatorTests {
     @Test("an unknown status still warns, marked as not confirmed")
     func unknownStatus() throws {
         let found = try warnings(.available([running("s1", .other)]), [last("s1", ago: 60)])
-        #expect(found.map(\.statusKnown) == [false])
+        #expect(found.map(\.status) == [.unknownStatus])
     }
 
     @Test("without running-session files, recent main sessions warn as not confirmed")
     func unavailableRegistry() throws {
         let found = try warnings(.unavailable, [last("s1", ago: 60), last("s2", ago: 120)], recent: ["s1", "s2"])
         #expect(found.map(\.sessionID) == ["s2", "s1"])
-        #expect(found.allSatisfy { !$0.statusKnown })
+        #expect(found.allSatisfy { $0.status == .unreadable })
     }
 
     @Test("the title falls back to the session name, then the folder name")
@@ -93,5 +93,13 @@ struct ExpiryCalculatorTests {
         let found = try warnings(.available([running("s1")]), [last("s1", ago: 60, model: "claude-future-9")])
         #expect(found.first?.priced == false)
         #expect(found.first?.rebuildCost == 120_000 * 8000)
+    }
+
+    @Test("two processes on one session give one warning, preferring the idle one")
+    func duplicateSessions() throws {
+        var other = running("s1", .other)
+        other.pid = 101
+        let found = try warnings(.available([other, running("s1")]), [last("s1", ago: 60)])
+        #expect(found.map(\.status) == [.idle])
     }
 }

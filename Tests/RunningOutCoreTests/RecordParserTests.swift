@@ -86,7 +86,8 @@ struct RecordParserTests {
         let line = """
             {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"<synthetic>","usage":{}}}
             """
-        #expect(parse(line) == .assistantWithoutCall(timestamp: 1_794_268_800))
+        // A known record (an API error or limit reply), so it is not evidence of a format change either.
+        #expect(parse(line) == .rejected)
     }
 
     @Test("an assistant line without usage is not a call even if the word appears in its text")

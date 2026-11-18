@@ -84,14 +84,14 @@ func main() throws {
     let warnings = [
         ExpiryWarning(
             sessionID: "s1", title: "Refactor parser", expiresAt: t + 8 * 60 - 1, ttl: .oneHour, contextTokens: 720_000,
-            rebuildCost: 5_760_000_000, model: "claude-opus-5-5", priced: true, statusKnown: true),
+            rebuildCost: 5_760_000_000, model: "claude-opus-5-5", priced: true, status: .idle),
         ExpiryWarning(
             sessionID: "s2", title: "Write release notes for the next version and update the changelog",
             expiresAt: t + 41 * 60, ttl: .oneHour, contextTokens: 168_000, rebuildCost: 1_344_000_000,
-            model: "claude-opus-5-5", priced: true, statusKnown: true),
+            model: "claude-opus-5-5", priced: true, status: .idle),
         ExpiryWarning(
             sessionID: "s3", title: "Quick question", expiresAt: t + 3 * 60, ttl: .fiveMinutes, contextTokens: 110_000,
-            rebuildCost: 550_000_000, model: "claude-opus-5-5", priced: true, statusKnown: false),
+            rebuildCost: 550_000_000, model: "claude-opus-5-5", priced: true, status: .unknownStatus),
     ]
     var changed = AppSettings()
     changed.rebuildThresholdTokens = 30_000

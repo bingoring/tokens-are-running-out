@@ -73,7 +73,7 @@ struct PresentationTests {
     func menuBar() {
         let warning = ExpiryWarning(
             sessionID: "s", title: nil, expiresAt: 1_480, ttl: .oneHour, contextTokens: 1, rebuildCost: 1, model: "m",
-            priced: true, statusKnown: true)
+            priced: true, status: .idle)
         var today = UsageReport(from: 0, to: 1)
         #expect(Presentation.menuBar(warnings: [warning], today: today, now: 1_000) == .expiring(minutes: 8))
         #expect(Presentation.menuBar(warnings: [], today: today, now: 1_000) == .iconOnly)
