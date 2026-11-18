@@ -17,7 +17,11 @@ while [ $# -gt 0 ]; do
     --debug) configuration=Debug ;;
     --snapshots) snapshots=1 ;;
     --release)
-        release="${2:-}"
+        if [ $# -lt 2 ] || [ -z "$2" ]; then
+            echo "--release takes a version like 1.2.3 or 1.2.3-rc.1" >&2
+            exit 2
+        fi
+        release="$2"
         shift
         ;;
     *)

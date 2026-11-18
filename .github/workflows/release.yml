@@ -126,7 +126,7 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
           PRERELEASE: ${{ steps.tag.outputs.prerelease }}
         run: |
-          asset=".build/release/TokensAreRunningOut-$VERSION.zip"
+          asset=".build/dist/TokensAreRunningOut-$VERSION.zip"
           sha=$(cut -d ' ' -f 1 "$asset.sha256")
           set -- "$TAG" "$asset" "$asset.sha256" --verify-tag --title "$TAG" --generate-notes \
             --notes "SHA-256 of TokensAreRunningOut-$VERSION.zip: \`$sha\`"
@@ -143,7 +143,7 @@ jobs:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           # If only this step fails, run the "Update Homebrew tap" workflow for this tag; it does not rebuild.
-          scripts/update-tap.sh "$VERSION" "$(cut -d ' ' -f 1 ".build/release/TokensAreRunningOut-$VERSION.zip.sha256")"
+          scripts/update-tap.sh "$VERSION" "$(cut -d ' ' -f 1 ".build/dist/TokensAreRunningOut-$VERSION.zip.sha256")"
 
       - name: Remove the keychain and keys
         if: always()

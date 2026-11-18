@@ -6,7 +6,7 @@
 #       --notary-key AuthKey.p8 --notary-key-id ID --notary-issuer UUID
 #   scripts/release.sh --version VERSION --dry-run     # ad-hoc signature, no notarization
 #
-# Output: .build/release/TokensAreRunningOut-VERSION.zip and .zip.sha256
+# Output: .build/dist/TokensAreRunningOut-VERSION.zip and .zip.sha256
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -32,7 +32,7 @@ if [ "$dry_run" = 0 ]; then
 fi
 
 app=.build/apps/TokensAreRunningOut.app
-out=.build/release
+out=.build/dist # not .build/release, which is SwiftPM's link to its release products
 asset="TokensAreRunningOut-$version.zip"
 [ -d "$app" ] || fail "build first: scripts/build-app.sh --release $version"
 rm -rf "$out"

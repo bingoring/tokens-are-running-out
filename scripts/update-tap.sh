@@ -50,7 +50,15 @@ fi
 : "${TAP_TOKEN:?TAP_TOKEN is not set}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/bingoring/homebrew-tap.git" "$work/tap"
+# The token goes to git through the environment as an HTTP header, so it is in neither the process arguments
+# nor the clone's .git/config.
+auth=$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 | tr -d '\n')
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    echo "::add-mask::$auth"
+fi
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+git clone -q https://github.com/bingoring/homebrew-tap.git "$work/tap"
 write_cask "$work/tap"
 cd "$work/tap"
 if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
