@@ -56,8 +56,8 @@ struct ReportTextTests {
         report.longBreak = BreakTotals(count: 1, tokens: 50_000, cost: 150_000_000_000)
         report.totalCost = 1_000_000_000_000
         report.bucketCosts = [
-            .normalWork: 600_000_000_000, .shortBreakRebuild: 100_000_000_000, .longBreakRebuild: 150_000_000_000,
-            .sessionStartAndCompaction: 50_000_000_000, .subagents: 90_000_000_000,
+            .normalWork: 400_000_000_000, .shortBreakRebuild: 100_000_000_000, .longBreakRebuild: 150_000_000_000,
+            .sessionStartAndCompaction: 50_000_000_000, .subagents: 90_000_000_000, .advisor: 200_000_000_000,
             .modelChangeAndUpdate: 10_000_000_000, .unknown: 0,
         ]
         report.reducibleCost = 90_000_000_000
@@ -73,14 +73,15 @@ struct ReportTextTests {
             "  expired, short break  2 calls, 70,000 tokens",
             "  expired, long break   1 calls, 50,000 tokens",
             "cost (API list)     $1,000.00",
-            "  normal work                  60.0%  $600.00",
+            "  normal work                  40.0%  $400.00",
             "  rebuild after short break    10.0%  $100.00",
             "  rebuild after long break     15.0%  $150.00",
             "  session start & compaction    5.0%  $50.00",
             "  subagents                     9.0%  $90.00",
+            "  advisor                      20.0%  $200.00",
             "  model change & update         1.0%  $10.00",
             "  unknown                       0.0%  $0.00",
-            "advisor (in buckets) 3 calls, input=150,000 output=2,400, $200.00 (20.0% of cost)",
+            "advisor calls       3, input=150,000 output=2,400",
             "menu bar (idle rebuilds) 25.0%",
             "reducible (short breaks) 9.0%",
             "unpriced models     claude-a x1, claude-future-9 x2",

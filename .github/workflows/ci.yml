@@ -28,10 +28,28 @@ jobs:
         run: swift test
 
       - name: Lint
-        run: swift format lint --strict --recursive Sources Tests Package.swift
+        run: swift format lint --strict --recursive Sources Tests Tools Package.swift
 
       - name: Same report as the prototype on synthetic fixtures
         run: prototype/parity.sh
+
+      - name: App bundle (xcodebuild compiles the String Catalog)
+        run: scripts/build-app.sh --snapshots
+
+      - name: Every string in the code is in the catalog with Korean
+        run: python3 -I scripts/check-strings.py
+
+      - name: Every screen state renders (synthetic data)
+        run: |
+          for language in en ko; do
+            .build/apps/UISnapshots.app/Contents/MacOS/ui-snapshots "$RUNNER_TEMP/snapshots" -AppleLanguages "($language)"
+          done
+
+      - name: Keep the screenshots for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-snapshots
+          path: ${{ runner.temp }}/snapshots
 
       - name: Embedded price table is current
         run: |
@@ -47,8 +65,8 @@ jobs:
 
       - name: Transcripts are only read (rule R9)
         run: |
-          if grep -rnE 'forWritingTo|forUpdating|\.write\(to|createFile\(|removeItem\(' Sources \
-              | grep -v 'Indexer.swift:.*databaseURL.path'; then
+          if grep -rnE 'forWritingTo|forWritingAtPath|forUpdating|\.write\(to|createFile\(|removeItem\(|createDirectory\(|moveItem\(|copyItem\(|replaceItem|fopen\(|O_WRONLY|O_RDWR|O_CREAT' Sources \
+              | grep -v 'Indexer.swift:.*database\(URL\|Folder\)'; then
             echo "Sources/ may only write the index database." >&2
             exit 1
           fi

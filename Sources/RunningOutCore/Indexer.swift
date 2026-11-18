@@ -33,6 +33,63 @@ public struct IndexSummary: Sendable, Equatable {
     }
 }
 
+/// Bytes read so far in one `indexAll`, for a progress bar.
+public struct IndexProgress: Sendable, Equatable {
+    public var bytesRead: Int64
+    public var bytesTotal: Int64
+    /// True when the index was empty: the first index after install or a schema change.
+    public var isInitial: Bool
+
+    public init(bytesRead: Int64, bytesTotal: Int64, isInitial: Bool) {
+        self.bytesRead = bytesRead
+        self.bytesTotal = bytesTotal
+        self.isInitial = isInitial
+    }
+}
+
+/// Whether recent transcript lines still parse into calls (2-3 BR-H1).
+public struct IndexHealth: Sendable, Equatable {
+    public enum Kind: Sendable, Equatable {
+        case none
+        /// More than 5% of recent assistant lines were not calls.
+        case unreadableLines(share: Double)
+        /// Main transcripts grew by 200 lines or more with no calls.
+        case noCalls
+    }
+
+    public var assistantLines = 0
+    public var assistantWithoutCall = 0
+    public var mainLinesAppended = 0
+    public var mainCallsAppended = 0
+    public var kind = Kind.none
+
+    public init() {}
+}
+
+/// A session's latest call, for its cache expiry (2-3 BR-E2, BR-E3).
+public struct LastCall: Sendable, Equatable {
+    public var sessionID: String
+    public var file: URL
+    public var timestamp: Double
+    public var ttl: CacheTTL
+    public var model: String
+    public var contextTokens: Int
+    public var title: String?
+
+    public init(
+        sessionID: String, file: URL, timestamp: Double, ttl: CacheTTL, model: String, contextTokens: Int,
+        title: String?
+    ) {
+        self.sessionID = sessionID
+        self.file = file
+        self.timestamp = timestamp
+        self.ttl = ttl
+        self.model = model
+        self.contextTokens = contextTokens
+        self.title = title
+    }
+}
+
 /// One event in a transcript, in file order.
 public struct TimelineEvent: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
@@ -51,14 +108,18 @@ public struct TimelineEvent: Sendable, Equatable {
 public final class Indexer {
     public let root: URL
     private let db: SQLiteDatabase
-    private static let schemaVersion = "3"
+    private static let schemaVersion = "4"
     /// Bytes at the start of a file that are fingerprinted to notice in-place rewrites.
     private static let headLimit = 1024
 
-    public init(root: URL, databaseURL: URL) throws {
+    /// Seconds since 1970; the day new lines were read counts toward the format-change check.
+    private let clock: () -> Double
+
+    public init(root: URL, databaseURL: URL, clock: @escaping () -> Double = { Date().timeIntervalSince1970 }) throws {
         self.root = TranscriptLocator.canonical(root)
-        try FileManager.default.createDirectory(
-            at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        self.clock = clock
+        let databaseFolder = databaseURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: databaseFolder, withIntermediateDirectories: true)
         do {
             db = try Indexer.open(databaseURL)
         } catch let error as SQLiteError where error.isCorruption {
@@ -75,8 +136,9 @@ public final class Indexer {
     /// Scans the whole root: reads new and changed files, newest first, and forgets deleted ones.
     /// A file that cannot be read is reported in `skippedFiles` and does not stop the scan.
     @discardableResult
-    public func indexAll() throws -> IndexSummary {
+    public func indexAll(progress: ((IndexProgress) -> Void)? = nil) throws -> IndexSummary {
         var summary = IndexSummary()
+        let isInitial = try db.queryRow("SELECT COUNT(*) FROM files") { $0.int(0) } == 0
         let scan = TranscriptLocator.findAll(root: root)
         let present = Set(scan.refs.map(\.url.path))
         for path in try knownPaths() where !present.contains(path) && !scan.isUnderUnreadableDirectory(path) {
@@ -84,9 +146,30 @@ public final class Indexer {
             summary.filesRemoved += 1
         }
         let stated = scan.refs.compactMap { ref in FileStat(ref.url).map { (ref, $0) } }
-        for (ref, stat) in stated.sorted(by: { $0.1.modified > $1.1.modified }) {
-            summary.add(try indexSkippingFailures(ref, stat))
+            .sorted { $0.1.modified > $1.1.modified }
+        var known: [String: (offset: UInt64, inode: UInt64)] = [:]
+        try db.query("SELECT path, offset, inode FROM files") {
+            known[$0.text(0)] = (UInt64(bitPattern: Int64($0.int(1))), UInt64(bitPattern: Int64($0.int(2))))
         }
+        // Bytes still to read per file: the unread tail, or the whole file when it was replaced or truncated.
+        let pending = stated.map { ref, stat -> Int64 in
+            guard let row = known[ref.url.path], row.inode == stat.inode, stat.size >= row.offset else {
+                return Int64(stat.size)
+            }
+            return Int64(stat.size - row.offset)
+        }
+        var report = IndexProgress(bytesRead: 0, bytesTotal: pending.reduce(0, +), isInitial: isInitial)
+        var lastReport = ContinuousClock.now
+        for ((ref, stat), bytes) in zip(stated, pending) {
+            summary.add(try indexSkippingFailures(ref, stat, initial: isInitial))
+            report.bytesRead += bytes
+            if let progress, ContinuousClock.now - lastReport >= .milliseconds(100) {
+                progress(report)
+                lastReport = .now
+            }
+        }
+        progress?(report)
+        try db.run("DELETE FROM read_stats WHERE day < ?", [.int(Indexer.day(clock()) - 30)])
         try db.run(
             "INSERT OR REPLACE INTO meta(key, value) VALUES('last_full_index_at', ?)",
             [.text(String(Date().timeIntervalSince1970))])
@@ -114,7 +197,7 @@ public final class Indexer {
                 ? TranscriptLocator.findAll(root: root, under: path)
                 : TranscriptScan(refs: [TranscriptLocator.classify(path, root: root)].compactMap { $0 })
             for ref in scan.refs where handled.insert(ref.url.path).inserted {
-                if let stat = FileStat(ref.url) { summary.add(try indexSkippingFailures(ref, stat)) }
+                if let stat = FileStat(ref.url) { summary.add(try indexSkippingFailures(ref, stat, initial: false)) }
             }
             if isDirectory.boolValue {
                 let present = Set(scan.refs.map(\.url.path))
@@ -129,9 +212,9 @@ public final class Indexer {
     }
 
     /// File problems (permissions, a file vanishing mid-read) skip that file; index problems throw.
-    private func indexSkippingFailures(_ ref: TranscriptRef, _ stat: FileStat) throws -> IndexSummary {
+    private func indexSkippingFailures(_ ref: TranscriptRef, _ stat: FileStat, initial: Bool) throws -> IndexSummary {
         do {
-            return try index(ref, stat)
+            return try index(ref, stat, initial: initial)
         } catch let error as SQLiteError {
             throw error
         } catch {
@@ -140,7 +223,8 @@ public final class Indexer {
         }
     }
 
-    private func index(_ ref: TranscriptRef, _ stat: FileStat) throws -> IndexSummary {
+    /// `initial`: part of the first index, whose lines are old history rather than new writes (BR-H1).
+    private func index(_ ref: TranscriptRef, _ stat: FileStat, initial: Bool) throws -> IndexSummary {
         try db.transaction {
             var summary = IndexSummary(filesScanned: 1)
             var file = try fileRow(path: ref.url.path) ?? insertFile(ref, stat)
@@ -161,6 +245,15 @@ public final class Indexer {
             var candidates = 0
             var failures = 0
             var unsettled = Set<String>()
+            let now = clock()
+            // Format-change evidence (BR-H1): assistant lines by their own day, appended lines by today.
+            var assistantByDay: [Int: (lines: Int, withoutCall: Int)] = [:]
+            var callsAppended = 0
+            func countAssistant(at timestamp: Double?, call: Bool) {
+                let day = Indexer.day(timestamp ?? now)
+                assistantByDay[day, default: (0, 0)].lines += 1
+                if !call { assistantByDay[day, default: (0, 0)].withoutCall += 1 }
+            }
             let nextOffset = try LineReader.readCompleteLines(at: ref.url, from: file.offset) { line in
                 lines += 1
                 switch RecordParser.parse(line) {
@@ -168,9 +261,13 @@ public final class Indexer {
                     return
                 case .rejected:
                     candidates += 1
+                case .assistantWithoutCall(let timestamp):
+                    candidates += 1
+                    countAssistant(at: timestamp, call: false)
                 case .malformed:
                     candidates += 1
                     failures += 1
+                    if !initial, line.range(of: Indexer.assistantType) != nil { countAssistant(at: nil, call: false) }
                 case .compaction(let timestamp):
                     candidates += 1
                     try db.run(
@@ -184,9 +281,11 @@ public final class Indexer {
                         [.int(file.id), .int(seq), .text(sessionID), .text(title)])
                 case .call(let call):
                     candidates += 1
+                    countAssistant(at: call.timestamp, call: true)
                     switch try recordOccurrence(call, fileID: file.id, seq: seq) {
                     case .inserted:
                         seq += 1
+                        callsAppended += 1
                         if try insertCall(call, ownerFileID: file.id) {
                             summary.callsAdded += 1
                         } else {
@@ -200,6 +299,12 @@ public final class Indexer {
                 }
             }
             for messageID in unsettled { try settleOwner(of: messageID) }
+            for (day, counts) in assistantByDay {
+                try addReadStats(fileID: file.id, day: day, assistant: counts)
+            }
+            if !initial, lines > 0 {
+                try addReadStats(fileID: file.id, day: Indexer.day(now), appended: (lines, callsAppended))
+            }
             if nextOffset > file.offset { summary.filesRead = 1 }
             summary.parseFailures = failures
             let head = try Indexer.head(of: ref.url, length: min(Indexer.headLimit, Int(nextOffset)))
@@ -284,6 +389,90 @@ public final class Indexer {
         return events.sorted { $0.seq < $1.seq }
     }
 
+    /// True when at least one transcript has been indexed: there are earlier results to show.
+    public func hasIndexedFiles() throws -> Bool {
+        try db.queryRow("SELECT COUNT(*) FROM files") { $0.int(0) } ?? 0 > 0
+    }
+
+    /// Format-change check (2-3 BR-H1): assistant lines over the last seven days, appended lines per day over
+    /// the last two days, so one earlier call cannot hide a day of lines without calls.
+    public func health(now: Double = Date().timeIntervalSince1970) throws -> IndexHealth {
+        let today = Indexer.day(now)
+        let since = today - 6
+        var health = IndexHealth()
+        try db.query(
+            "SELECT COALESCE(SUM(assistant_lines), 0), COALESCE(SUM(assistant_without_call), 0) FROM read_stats "
+                + "WHERE day >= ?", [.int(since)]
+        ) {
+            health.assistantLines = $0.int(0)
+            health.assistantWithoutCall = $0.int(1)
+        }
+        var dayWithoutCalls = false
+        try db.query(
+            """
+            SELECT r.day, SUM(r.lines_appended), SUM(r.calls_appended)
+            FROM read_stats r JOIN files f ON f.id = r.file_id WHERE f.kind = 'main' AND r.day >= ? GROUP BY r.day
+            """, [.int(today - 1)]
+        ) {
+            health.mainLinesAppended += $0.int(1)
+            health.mainCallsAppended += $0.int(2)
+            if $0.int(1) >= 200, $0.int(2) == 0 { dayWithoutCalls = true }
+        }
+        if health.assistantLines >= 50, health.assistantWithoutCall * 20 > health.assistantLines {
+            health.kind = .unreadableLines(share: Double(health.assistantWithoutCall) / Double(health.assistantLines))
+        } else if dayWithoutCalls {
+            health.kind = .noCalls
+        }
+        return health
+    }
+
+    /// The last call in a session's main transcript, with the TTL its cache is under (2-3 BR-I3).
+    public func lastCall(ofSession sessionID: String) throws -> LastCall? {
+        guard
+            let file = try db.queryRow(
+                "SELECT id, path FROM files WHERE kind = 'main' AND session_id = ? ORDER BY birthtime DESC LIMIT 1",
+                [.text(sessionID)], { (id: $0.int(0), path: $0.text(1)) })
+        else { return nil }
+        guard
+            let call = try db.queryRow(
+                """
+                SELECT message_id, ts, model, version, line_session_id, input_tokens, output_tokens,
+                cache_read_tokens, cache_write_tokens, cache_write_1h, cache_write_5m, ttl, iterations
+                FROM occurrences WHERE file_id = ? ORDER BY seq DESC LIMIT 1
+                """, [.int(file.id)],
+                { s in
+                    CallRecord(
+                        messageID: s.text(0), timestamp: s.double(1), model: s.text(2), version: s.optionalText(3),
+                        lineSessionID: s.optionalText(4), inputTokens: s.int(5), outputTokens: s.int(6),
+                        cacheReadTokens: s.int(7), cacheWriteTokens: s.int(8), cacheWrite1h: s.int(9),
+                        cacheWrite5m: s.int(10), ttl: s.optionalText(11).flatMap(CacheTTL.init(rawValue:)),
+                        iterations: Indexer.decodeIterations(s.optionalText(12)))
+                })
+        else { return nil }
+        // A call without a TTL breakdown is under the last TTL seen in the file, else one hour (2-2 R5).
+        let inherited =
+            try db.queryRow(
+                "SELECT ttl FROM occurrences WHERE file_id = ? AND ttl IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                [.int(file.id)]
+            ) { CacheTTL(rawValue: $0.text(0)) } ?? nil
+        return LastCall(
+            sessionID: sessionID, file: URL(fileURLWithPath: file.path), timestamp: call.timestamp,
+            ttl: call.ttl ?? inherited ?? .oneHour, model: call.model, contextTokens: call.contextTokens,
+            title: try title(of: sessionID))
+    }
+
+    /// Main sessions with a call at or after `since`, for when running sessions cannot be read (2-3 BR-E1).
+    public func mainSessions(withCallsSince since: Double) throws -> [String] {
+        var sessions: [String] = []
+        try db.query(
+            """
+            SELECT DISTINCT f.session_id FROM occurrences o JOIN files f ON f.id = o.file_id
+            WHERE f.kind = 'main' AND o.ts >= ? ORDER BY f.session_id
+            """, [.double(since)]
+        ) { sessions.append($0.text(0)) }
+        return sessions
+    }
+
     /// The latest title: from the newest file, and the last one in that file (R11).
     public func title(of sessionID: String) throws -> String? {
         try db.queryRow(
@@ -327,7 +516,7 @@ public final class Indexer {
         try db.execute(
             """
             DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS calls; DROP TABLE IF EXISTS occurrences;
-            DROP TABLE IF EXISTS marks; DROP TABLE IF EXISTS titles;
+            DROP TABLE IF EXISTS marks; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS read_stats;
             CREATE TABLE files(
                 id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, session_id TEXT NOT NULL,
                 agent_id TEXT, inode INTEGER NOT NULL, birthtime REAL NOT NULL, size INTEGER NOT NULL DEFAULT 0,
@@ -352,6 +541,10 @@ public final class Indexer {
                 id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, seq INTEGER NOT NULL, session_id TEXT NOT NULL,
                 title TEXT NOT NULL);
             CREATE INDEX titles_session ON titles(session_id);
+            CREATE TABLE read_stats(
+                file_id INTEGER NOT NULL, day INTEGER NOT NULL, assistant_lines INTEGER NOT NULL DEFAULT 0,
+                assistant_without_call INTEGER NOT NULL DEFAULT 0, lines_appended INTEGER NOT NULL DEFAULT 0,
+                calls_appended INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(file_id, day));
             """)
         try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", [.text(schemaVersion)])
         return db
@@ -487,7 +680,7 @@ public final class Indexer {
         try db.query("SELECT message_id FROM occurrences WHERE file_id = ?", [.int(file.id)]) {
             messageIDs.append($0.text(0))
         }
-        for table in ["occurrences", "marks", "titles"] {
+        for table in ["occurrences", "marks", "titles", "read_stats"] {
             try db.run("DELETE FROM \(table) WHERE file_id = ?", [.int(file.id)])
         }
         for messageID in messageIDs { try settleOwner(of: messageID) }
@@ -511,6 +704,30 @@ public final class Indexer {
         try db.query("SELECT path FROM files") { paths.append($0.text(0)) }
         guard let prefix else { return paths }
         return paths.filter { $0 == prefix || $0.hasPrefix(prefix + "/") }
+    }
+
+    private static let assistantType = Data(#""type":"assistant""#.utf8)
+
+    /// Days since 1970 in UTC, the unit of `read_stats`.
+    static func day(_ timestamp: Double) -> Int { Int((timestamp / 86_400).rounded(.down)) }
+
+    private func addReadStats(
+        fileID: Int, day: Int, assistant: (lines: Int, withoutCall: Int) = (0, 0),
+        appended: (lines: Int, calls: Int) = (0, 0)
+    ) throws {
+        try db.run(
+            """
+            INSERT INTO read_stats(file_id, day, assistant_lines, assistant_without_call, lines_appended, calls_appended)
+            VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(file_id, day) DO UPDATE SET
+            assistant_lines = assistant_lines + excluded.assistant_lines,
+            assistant_without_call = assistant_without_call + excluded.assistant_without_call,
+            lines_appended = lines_appended + excluded.lines_appended,
+            calls_appended = calls_appended + excluded.calls_appended
+            """,
+            [
+                .int(fileID), .int(day), .int(assistant.lines), .int(assistant.withoutCall), .int(appended.lines),
+                .int(appended.calls),
+            ])
     }
 
     /// True when the bytes already read no longer start the file (rewritten in place, same inode).

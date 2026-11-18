@@ -86,6 +86,12 @@ public struct CallRecord: Sendable, Equatable {
 
     /// What was used and billed, step by step.
     public var parts: [UsagePart] { iterations.isEmpty ? [topLevel] : iterations }
+
+    /// The prompt of the call's last main-model step: what the cache holds after this call.
+    public var contextTokens: Int {
+        let last = parts.last { $0.kind == .message } ?? topLevel
+        return last.inputTokens + last.cacheReadTokens + last.cacheWriteTokens
+    }
 }
 
 public enum ParsedLine: Sendable, Equatable {
@@ -94,6 +100,9 @@ public enum ParsedLine: Sendable, Equatable {
     case call(CallRecord)
     case compaction(timestamp: Double?)
     case title(sessionID: String, title: String)
+    /// A top-level assistant record that is not an API call: a synthetic message, or a record whose shape
+    /// changed. Counted to notice a format change (2-3 BR-I4).
+    case assistantWithoutCall(timestamp: Double?)
     /// A candidate that turned out not to be a call, mark or title (rule R2).
     case rejected
     /// A candidate whose JSON could not be decoded (rule R3).
@@ -104,11 +113,11 @@ public enum RecordParser {
     private static let compactMarker = Data(#""compact_boundary""#.utf8)
     private static let titleMarker = Data(#""custom-title""#.utf8)
     private static let assistantMarker = Data(#""assistant""#.utf8)
-    private static let usageMarker = Data(#""usage""#.utf8)
 
     public static func parse(_ line: Data) -> ParsedLine {
-        // R1: decode only lines that can hold something the index uses.
-        let maybeCall = line.range(of: assistantMarker) != nil && line.range(of: usageMarker) != nil
+        // R1: decode only lines that can hold something the index uses. Assistant records are decoded even
+        // without a usage field, so one that lost it is noticed (2-3 BR-I4).
+        let maybeCall = line.range(of: assistantMarker) != nil
         let maybeCompaction = line.range(of: compactMarker) != nil
         let maybeTitle = line.range(of: titleMarker) != nil
         guard maybeCall || maybeCompaction || maybeTitle else { return .notCandidate }
@@ -136,10 +145,12 @@ public enum RecordParser {
     /// R2: only real API calls with an id, a timestamp and usage.
     private static func call(from raw: RawLine) -> ParsedLine {
         // Matches the prototype oracle: an empty usage object or an empty id is not a call.
+        // Synthetic messages (API errors, limit replies) are known records, not a sign of a format change.
+        if raw.message?.model == "<synthetic>" { return .rejected }
         guard let message = raw.message, let usage = message.usage, usage.keyCount > 0,
-            let id = message.id, !id.isEmpty, let model = message.model, !model.isEmpty, model != "<synthetic>",
+            let id = message.id, !id.isEmpty, let model = message.model, !model.isEmpty,
             let timestamp = raw.timestamp.flatMap(Timestamp.parse)
-        else { return .rejected }
+        else { return .assistantWithoutCall(timestamp: raw.timestamp.flatMap(Timestamp.parse)) }
 
         let top = part(
             usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens,

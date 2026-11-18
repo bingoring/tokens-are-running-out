@@ -68,15 +68,49 @@ func run(_ command: CLICommand) async throws {
         let mismatches = try await service.usageMismatchCount()
         if mismatches > 0 { warn("calls whose copies disagree on usage: \(mismatches)") }
 
-    case .report(let root, let database, let from, let to):
+    case .report(let root, let database, let from, let to, let threshold):
         let service = openService(root: root, database: database)
         _ = report(try await service.indexAll())
         let style = Date.ISO8601FormatStyle()
         let text = ReportText.render(
-            try await service.report(from: from, to: to),
+            try await service.report(from: from, to: to, rebuildThreshold: threshold),
             fromText: style.format(Date(timeIntervalSince1970: from)),
             toText: style.format(Date(timeIntervalSince1970: to)))
         print(text)
+
+    case .health(let root, let database):
+        let service = openService(root: root, database: database)
+        _ = report(try await service.indexAll())
+        let health = try await service.health()
+        print(
+            "assistant lines (7 days)   \(grouped(health.assistantLines)), not calls \(grouped(health.assistantWithoutCall))"
+        )
+        print(
+            "main lines appended        \(grouped(health.mainLinesAppended)), calls \(grouped(health.mainCallsAppended))"
+        )
+        print("format change              \(health.kind)")
+
+    case .sessions(let root, let database):
+        // Counts and numbers only: session titles stay off the terminal.
+        let service = openService(root: root, database: database)
+        _ = report(try await service.indexAll())
+        let registry = SessionRegistry(directory: SessionRegistry.directory(besideRoot: root))
+        let state = registry.load()
+        switch state {
+        case .unavailable:
+            print("running sessions           unavailable")
+        case .available(let sessions):
+            let idle = sessions.filter { $0.status == .idle }.count
+            let busy = sessions.filter { $0.status == .busy }.count
+            print("running sessions           \(sessions.count) (idle \(idle), busy \(busy))")
+        }
+        let now = Date().timeIntervalSince1970
+        for warning in try await service.expiryWarnings(registry: state, now: now) {
+            print(
+                "warning                    \(Int(((warning.expiresAt - now) / 60).rounded(.up))) min left, "
+                    + "context \(grouped(warning.contextTokens)), \(ReportText.money(warning.rebuildCost)), "
+                    + "ttl \(warning.ttl.rawValue), status \(warning.status)")
+        }
 
     case .watch(let root, let database):
         let service = openService(root: root, database: database)

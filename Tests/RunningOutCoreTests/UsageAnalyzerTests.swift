@@ -115,13 +115,15 @@ struct UsageAnalyzerTests {
         #expect(report.rebuilds.isEmpty)
     }
 
-    private func report(of dir: TempDir) throws -> UsageReport {
+    private func report(of dir: TempDir, rebuildThreshold: Int = RebuildClassifier.rebuildThreshold) throws
+        -> UsageReport
+    {
         let indexer = try Indexer(
             root: dir.url.appendingPathComponent("projects"),
             databaseURL: dir.url.appendingPathComponent("index.sqlite"))
         try indexer.indexAll()
-        return try UsageAnalyzer(indexer: indexer, prices: PriceTable.bundled()).report(
-            from: nov10, to: nov10 + 86_400)
+        return try UsageAnalyzer(indexer: indexer, prices: PriceTable.bundled(), rebuildThreshold: rebuildThreshold)
+            .report(from: nov10, to: nov10 + 86_400)
     }
 
     @Test("a rebuild's cache write goes to its cause and the rest of that call to normal work")
@@ -137,7 +139,7 @@ struct UsageAnalyzerTests {
         #expect(report.bucketCosts[.normalWork] == 44_000_000)
     }
 
-    @Test("an advisor consult is charged at the advisor's prices in its call's bucket and also totalled apart")
+    @Test("an advisor consult is charged at the advisor's prices in the advisor bucket, in main sessions and subagents")
     func advisorCost() throws {
         let dir = try TempDir()
         // Session start: Opus 5.5 write 60,000 x 8000 = 480,000,000.
@@ -161,8 +163,10 @@ struct UsageAnalyzerTests {
             to: "projects/-p/s1/subagents/agent-a.jsonl")
         let report = try report(of: dir)
         #expect(report.bucketCosts[.sessionStartAndCompaction] == 480_000_000)
-        #expect(report.bucketCosts[.normalWork] == 432_000_000)
-        #expect(report.bucketCosts[.subagents] == 101_000_000)
+        #expect(report.bucketCosts[.normalWork] == 0)
+        #expect(report.bucketCosts[.subagents] == 1_000_000)
+        #expect(report.bucketCosts[.advisor] == 532_000_000)
+        #expect(report.bucketCosts.values.reduce(0, +) == report.totalCost)
         #expect(report.totalCost == 1_013_000_000)
         #expect(report.advisor == AdvisorTotals(calls: 2, inputTokens: 60_000, outputTokens: 800, cost: 532_000_000))
         #expect(report.unpricedModels.isEmpty)
@@ -203,5 +207,39 @@ struct UsageAnalyzerTests {
         let report = try report(of: dir)
         #expect(report.calls == 2)
         #expect(report.mainRebuildCounts == [.sessionStart: 1, .expiredShortBreak: 1])
+    }
+
+    @Test("the rebuild threshold is a setting: above a call's write, that call is normal work")
+    func rebuildThresholdSetting() throws {
+        let dir = try TempDir()
+        // Write 60,000 x 8000 = 480,000,000; input 1,000 x 4000 + output 2,000 x 20000 = 44,000,000.
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 1_000, output: 2_000, write: 60_000),
+            to: "projects/-p/s1.jsonl")
+        let raised = try report(of: dir, rebuildThreshold: 70_000)
+        #expect(raised.rebuildCount == 0)
+        #expect(raised.bucketCosts[.normalWork] == 524_000_000)
+        let lowered = try report(of: dir, rebuildThreshold: 60_000)
+        #expect(lowered.rebuildCount == 1)
+    }
+
+    @Test("a rebuild keeps the context size of the call before it, for long-break rows")
+    func previousContext() throws {
+        let report = try makeReport()
+        // m3 follows m2, whose prompt was 0 input + 60,000 read + 100 written.
+        #expect(report.rebuilds.first { $0.messageID == "m3" }?.previousContextTokens == 60_100)
+        #expect(report.rebuilds.first { $0.messageID == "m1" }?.previousContextTokens == nil)
+    }
+
+    @Test("a rebuild priced with the fallback says so")
+    func unpricedRebuild() throws {
+        let dir = try TempDir()
+        try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", model: "claude-future-9", write: 60_000),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.rebuilds.first?.priced == false)
+        #expect(report.unpricedModels == ["claude-future-9": 1])
     }
 }

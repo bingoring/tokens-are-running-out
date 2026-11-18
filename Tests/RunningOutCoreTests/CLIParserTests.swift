@@ -72,8 +72,20 @@ struct CLIParserTests {
             command
                 == .report(
                     root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite"),
-                    from: 1_794_268_800, to: 1_794_873_600))
+                    from: 1_794_268_800, to: 1_794_873_600, rebuildThreshold: 50_000))
         #expect(exitCode("report --from 2026-11-10T00:00:00Z") == 2)
+    }
+
+    @Test("report takes a rebuild threshold of one token or more")
+    func reportThreshold() throws {
+        let window = "--root /r --db /d.sqlite --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z"
+        #expect(
+            try parse("report \(window) --rebuild-threshold 30000")
+                == .report(
+                    root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite"),
+                    from: 1_794_268_800, to: 1_794_873_600, rebuildThreshold: 30_000))
+        #expect(exitCode("report \(window) --rebuild-threshold 0") == 2)
+        #expect(exitCode("report \(window) --rebuild-threshold lots") == 2)
     }
 
     @Test("a window boundary with fractional seconds is refused, so the printed window is exact")
@@ -87,5 +99,25 @@ struct CLIParserTests {
         #expect(
             try parse("watch --root /r --db /d.sqlite")
                 == .watch(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
+    }
+
+    @Test("health takes the same path options as index")
+    func health() throws {
+        #expect(
+            try parse("health --root /r --db /d.sqlite")
+                == .health(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
+    }
+
+    @Test("sessions takes the same path options as index")
+    func sessions() throws {
+        #expect(
+            try parse("sessions --root /r --db /d.sqlite")
+                == .sessions(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
+    }
+
+    @Test("the rebuild threshold belongs to report only")
+    func thresholdOnlyForReport() {
+        #expect(
+            exitCode("stats --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z --rebuild-threshold 30000") == 2)
     }
 }

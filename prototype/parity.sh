@@ -22,4 +22,12 @@ python3 -I prototype/drain.py --root "$work/projects" $window >"$work/prototype.
 
 diff -u "$work/prototype.txt" "$work/swift.txt"
 diff -u "$fixtures/expected-report.txt" "$work/swift.txt"
+
+# A non-default rebuild threshold must agree too (it is a user setting in the app).
+# shellcheck disable=SC2086
+.build/debug/running-out report --root "$work/projects" --db "$work/index.sqlite" $window --rebuild-threshold 60000 \
+    >"$work/swift-60k.txt"
+# shellcheck disable=SC2086
+python3 -I prototype/drain.py --root "$work/projects" $window --rebuild-threshold 60000 >"$work/prototype-60k.txt"
+diff -u "$work/prototype-60k.txt" "$work/swift-60k.txt"
 echo "parity: the Swift report and the prototype agree on the fixtures"
