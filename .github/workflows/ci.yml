@@ -51,6 +51,11 @@ jobs:
           name: ui-snapshots
           path: ${{ runner.temp }}/snapshots
 
+      - name: Release build is universal and signs with the hardened runtime (ad hoc, no secrets)
+        run: |
+          scripts/build-app.sh --release 0.0.0
+          scripts/release.sh --version 0.0.0 --dry-run
+
       - name: Embedded price table is current
         run: |
           python3 -I scripts/embed-pricing.py
