@@ -28,18 +28,19 @@ public enum RebuildClassifier {
 
     /// Judged per step: a later step of the same call can read the new cache back, so the call's totals can
     /// hide a rebuild. An advisor consult runs on its own model and never rebuilds the conversation's cache.
-    public static func isRebuild(_ part: UsagePart) -> Bool {
-        part.kind == .message && part.cacheWriteTokens >= rebuildThreshold
-            && part.cacheWriteTokens > part.cacheReadTokens
+    public static func isRebuild(_ part: UsagePart, threshold: Int = rebuildThreshold) -> Bool {
+        part.kind == .message && part.cacheWriteTokens >= threshold && part.cacheWriteTokens > part.cacheReadTokens
     }
 
-    public static func isRebuild(_ call: CallRecord) -> Bool { call.parts.contains { isRebuild($0) } }
+    public static func isRebuild(_ call: CallRecord, threshold: Int = rebuildThreshold) -> Bool {
+        call.parts.contains { isRebuild($0, threshold: threshold) }
+    }
 
     /// Walks one transcript in file order and classifies its owned calls in `[from, to)`.
     /// Every call, copied or outside the window, still becomes the context for the next one (R3).
-    public static func classify(_ events: [TimelineEvent], kind: TranscriptKind, from: Double, to: Double)
-        -> [ClassifiedCall]
-    {
+    public static func classify(
+        _ events: [TimelineEvent], kind: TranscriptKind, from: Double, to: Double, threshold: Int = rebuildThreshold
+    ) -> [ClassifiedCall] {
         var result: [ClassifiedCall] = []
         var previous: CallRecord?
         var previousTTL: CacheTTL = kind == .main ? .oneHour : .fiveMinutes  // R5 default
@@ -50,7 +51,7 @@ public enum RebuildClassifier {
                 continue
             }
             if owned, from <= call.timestamp, call.timestamp < to {
-                let rebuild = isRebuild(call)
+                let rebuild = isRebuild(call, threshold: threshold)
                 let cause =
                     rebuild && kind == .main
                     ? cause(of: call, previous: previous, previousTTL: previousTTL, compacted: compacted) : nil

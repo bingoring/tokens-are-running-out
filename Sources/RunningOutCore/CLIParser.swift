@@ -4,7 +4,7 @@ public enum CLICommand: Equatable, Sendable {
     case index(root: URL, database: URL)
     case stats(root: URL, database: URL, from: Double, to: Double)
     case watch(root: URL, database: URL)
-    case report(root: URL, database: URL, from: Double, to: Double)
+    case report(root: URL, database: URL, from: Double, to: Double, rebuildThreshold: Int)
 }
 
 public struct CLIError: Error, Equatable {
@@ -20,7 +20,7 @@ public enum CLIParser {
     public static let usage = """
         usage: running-out index [--root PATH] [--db PATH]
                running-out stats --from ISO8601 --to ISO8601 [--root PATH] [--db PATH]
-               running-out report --from ISO8601 --to ISO8601 [--root PATH] [--db PATH]
+               running-out report --from ISO8601 --to ISO8601 [--rebuild-threshold TOKENS] [--root PATH] [--db PATH]
                running-out watch [--root PATH] [--db PATH]
         """
 
@@ -38,7 +38,9 @@ public enum CLIParser {
         var options: [String: String] = [:]
         var rest = arguments.dropFirst()
         while let flag = rest.popFirst() {
-            guard ["--root", "--db", "--from", "--to"].contains(flag) else { throw .usage("Unknown option \(flag).") }
+            guard ["--root", "--db", "--from", "--to", "--rebuild-threshold"].contains(flag) else {
+                throw .usage("Unknown option \(flag).")
+            }
             guard let value = rest.popFirst() else { throw .usage("Missing value for \(flag).") }
             options[flag] = value
         }
@@ -66,9 +68,15 @@ public enum CLIParser {
                 throw .usage("Use ISO 8601 UTC, e.g. 2026-11-10T00:00:00Z.")
             }
             guard from < to else { throw .usage("--from must be earlier than --to.") }
-            return command == "stats"
-                ? .stats(root: root, database: database, from: from, to: to)
-                : .report(root: root, database: database, from: from, to: to)
+            if command == "stats" { return .stats(root: root, database: database, from: from, to: to) }
+            var threshold = RebuildClassifier.rebuildThreshold
+            if let text = options["--rebuild-threshold"] {
+                guard let value = Int(text), value >= 1 else {
+                    throw .usage("--rebuild-threshold takes a whole number of tokens, 1 or more.")
+                }
+                threshold = value
+            }
+            return .report(root: root, database: database, from: from, to: to, rebuildThreshold: threshold)
         default:
             throw .usage("Unknown command \(command).")
         }

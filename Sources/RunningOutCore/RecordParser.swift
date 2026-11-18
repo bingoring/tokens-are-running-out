@@ -86,6 +86,12 @@ public struct CallRecord: Sendable, Equatable {
 
     /// What was used and billed, step by step.
     public var parts: [UsagePart] { iterations.isEmpty ? [topLevel] : iterations }
+
+    /// The prompt of the call's last main-model step: what the cache holds after this call.
+    public var contextTokens: Int {
+        let last = parts.last { $0.kind == .message } ?? topLevel
+        return last.inputTokens + last.cacheReadTokens + last.cacheWriteTokens
+    }
 }
 
 public enum ParsedLine: Sendable, Equatable {

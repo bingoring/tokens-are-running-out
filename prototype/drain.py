@@ -14,8 +14,9 @@ Rules (design doc sections 6.1-6.4, with the 2-2 corrections in DECISIONS.md):
     in that file holds the final usage (Claude Code fills the usage in as the response streams)
   * `usage.iterations` splits a call into steps; an `advisor_message` step runs on its own model
     and is left out of the top-level input and output, so cost is the sum over the steps
-  * a step is a rebuild when it writes >= 50,000 cache tokens and more than it read; a call is a
-    rebuild when one of its main-model steps is (advisor steps never are)
+  * a step is a rebuild when it writes >= the threshold (default 50,000, --rebuild-threshold) cache
+    tokens and more than it read; a call is a rebuild when one of its main-model steps is (advisor
+    steps never are)
   * main-session rebuild causes, checked in order: session start (no earlier call in the
     file), after compaction, model changed, expired (gap > TTL of the previous call),
     version changed, unknown
@@ -24,8 +25,9 @@ Rules (design doc sections 6.1-6.4, with the 2-2 corrections in DECISIONS.md):
     a model id matches a table key exactly or with a date suffix (-YYYYMMDD); Claude Haiku 5.5
     uses its long-context prices when a step's prompt is over 100,000 tokens; a model missing from
     the table is priced as claude-opus-5-5 and reported as unpriced
-  * cost buckets (design 6.4): the cache-write cost of the steps that rebuilt goes to the cause,
-    the rest of that call to normal work; every subagent call goes to subagents
+  * cost buckets (design 6.4): advisor steps go to advisor; the cache-write cost of the steps that
+    rebuilt goes to the cause, the rest of that call to normal work; the rest of every subagent call
+    goes to subagents
   * expired rebuilds split into short breaks (gap <= 3h) and long breaks (gap > 3h);
     only short breaks count as reducible (the user could have resumed before expiry)
 """
@@ -98,9 +100,16 @@ def parts(model, usage):
     ]
 
 
-def rebuilt(kind, step):
+def rebuilt(kind, step, threshold=THRESHOLD):
     write = step.get("cache_creation_input_tokens") or 0
-    return kind == "message" and write >= THRESHOLD and write > (step.get("cache_read_input_tokens") or 0)
+    return kind == "message" and write >= threshold and write > (step.get("cache_read_input_tokens") or 0)
+
+
+def positive_int(text):
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be 1 or more")
+    return value
 
 
 class Pricing:
@@ -236,6 +245,7 @@ def main():
     p.add_argument("--to", dest="hi", required=True, help="exclusive, ISO 8601 UTC")
     p.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
     p.add_argument("--pricing", default=PRICING_PATH)
+    p.add_argument("--rebuild-threshold", type=positive_int, default=THRESHOLD)
     a = p.parse_args()
     lo, hi = iso(a.lo), iso(a.hi)
 
@@ -277,7 +287,7 @@ def main():
             u = final[mid]
             t = iso(o["timestamp"])
             steps = parts(m["model"], u)
-            is_rebuild = any(rebuilt(kind, step) for kind, _, step in steps)
+            is_rebuild = any(rebuilt(kind, step, a.rebuild_threshold) for kind, _, step in steps)
 
             # Copied calls (owned by another file) still set this file's context,
             # but are counted only in their owner.
@@ -288,7 +298,7 @@ def main():
                 tokens["output"] += u.get("output_tokens") or 0
                 tokens["cache_read"] += u.get("cache_read_input_tokens") or 0
                 tokens["cache_write"] += cc
-                cost = rb_write = rb_tok = rb_as_read = 0
+                cost = rb_write = rb_tok = rb_as_read = advisor_cost = 0
                 consulted = False
                 missing = set()
                 for kind, model, step in steps:
@@ -301,7 +311,8 @@ def main():
                         advisor[1] += step.get("input_tokens") or 0
                         advisor[2] += step.get("output_tokens") or 0
                         advisor[3] += write + other
-                    if is_rebuild and rebuilt(kind, step):
+                        advisor_cost += write + other
+                    if is_rebuild and rebuilt(kind, step, a.rebuild_threshold):
                         rb_write += write
                         rb_tok += step.get("cache_creation_input_tokens") or 0
                         rb_as_read += as_read
@@ -309,15 +320,16 @@ def main():
                 for model in missing:
                     unpriced[model] += 1
                 total_cost += cost
+                buckets["advisor"] += advisor_cost
 
                 if is_sub:
-                    buckets["subagents"] += cost
+                    buckets["subagents"] += cost - advisor_cost
                     if is_rebuild:
                         rebuild_n += 1
                         rebuild_tok += rb_tok
                         sub_rebuild_n += 1
                 elif not is_rebuild:
-                    buckets["normal work"] += cost
+                    buckets["normal work"] += cost - advisor_cost
                 else:
                     rebuild_n += 1
                     rebuild_tok += rb_tok
@@ -334,7 +346,7 @@ def main():
                     else:
                         cause = "unknown"
                     causes[cause] += 1
-                    buckets["normal work"] += cost - rb_write
+                    buckets["normal work"] += cost - rb_write - advisor_cost
                     if cause == "expired":
                         kind = "short break" if (t - last_t) / 3600 <= SHORT_BREAK_HOURS else "long break"
                         breaks[kind][0] += 1
@@ -365,11 +377,10 @@ def main():
     print(f"cost (API list)     ${total_cost / 1e9:,.2f}")
     if total_cost:
         for name in ["normal work", "rebuild after short break", "rebuild after long break",
-                     "session start & compaction", "subagents", "model change & update", "unknown"]:
+                     "session start & compaction", "subagents", "advisor", "model change & update", "unknown"]:
             print(f"  {name:<27} {buckets[name] / total_cost:6.1%}  ${buckets[name] / 1e9:,.2f}")
         if advisor[0]:
-            print(f"advisor (in buckets) {advisor[0]} calls, input={advisor[1]:,} output={advisor[2]:,}, "
-                  f"${advisor[3] / 1e9:,.2f} ({advisor[3] / total_cost:.1%} of cost)")
+            print(f"advisor calls       {advisor[0]}, input={advisor[1]:,} output={advisor[2]:,}")
         idle = breaks["short break"][2] + breaks["long break"][2]
         print(f"menu bar (idle rebuilds) {idle / total_cost:.1%}")
         print(f"reducible (short breaks) {reducible / total_cost:.1%}")

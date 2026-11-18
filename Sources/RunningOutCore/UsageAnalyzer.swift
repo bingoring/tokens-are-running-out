@@ -6,6 +6,7 @@ public enum CostBucket: String, Sendable, CaseIterable {
     case longBreakRebuild
     case sessionStartAndCompaction
     case subagents
+    case advisor
     case modelChangeAndUpdate
     case unknown
 }
@@ -23,7 +24,7 @@ public struct BreakTotals: Sendable, Equatable {
     }
 }
 
-/// Advisor consults inside the calls of a window. Their cost is already in the buckets of their calls.
+/// Advisor consults inside the calls of a window. Their cost is the `advisor` bucket.
 public struct AdvisorTotals: Sendable, Equatable {
     public var calls = 0
     public var inputTokens = 0
@@ -60,11 +61,14 @@ public struct RebuildEvent: Sendable, Equatable {
     public var cacheWriteCost: Int
     /// nano-USD; non-zero only for short-break expiries
     public var reducibleCost: Int
+    /// The context of the call before the rebuild: what was cached when the break began.
+    public var previousContextTokens: Int?
 
     public init(
         messageID: String, timestamp: Double, file: URL, sessionID: String, title: String?, cause: RebuildCause,
         previousTimestamp: Double?, gapSeconds: Double?, previousTTL: CacheTTL, previousModel: String?, model: String,
-        previousVersion: String?, version: String?, cacheWriteTokens: Int, cacheWriteCost: Int, reducibleCost: Int
+        previousVersion: String?, version: String?, cacheWriteTokens: Int, cacheWriteCost: Int, reducibleCost: Int,
+        previousContextTokens: Int? = nil
     ) {
         self.messageID = messageID
         self.timestamp = timestamp
@@ -82,6 +86,7 @@ public struct RebuildEvent: Sendable, Equatable {
         self.cacheWriteTokens = cacheWriteTokens
         self.cacheWriteCost = cacheWriteCost
         self.reducibleCost = reducibleCost
+        self.previousContextTokens = previousContextTokens
     }
 }
 
@@ -124,10 +129,12 @@ public struct UsageReport: Sendable, Equatable {
 public final class UsageAnalyzer {
     private let indexer: Indexer
     private let prices: PriceTable
+    private let rebuildThreshold: Int
 
-    public init(indexer: Indexer, prices: PriceTable) {
+    public init(indexer: Indexer, prices: PriceTable, rebuildThreshold: Int = RebuildClassifier.rebuildThreshold) {
         self.indexer = indexer
         self.prices = prices
+        self.rebuildThreshold = rebuildThreshold
     }
 
     public func report(from: Double, to: Double) throws -> UsageReport {
@@ -135,12 +142,13 @@ public final class UsageAnalyzer {
         var titles: [String: String?] = [:]
         for file in try indexer.ownedFiles(from: from, to: to) {
             let classified = RebuildClassifier.classify(
-                try indexer.timeline(of: file.url), kind: file.kind, from: from, to: to)
+                try indexer.timeline(of: file.url), kind: file.kind, from: from, to: to, threshold: rebuildThreshold)
             for item in classified {
                 let call = item.call
                 // Each step at its own model (R10). Only the steps that rebuilt go to the rebuild's cause (R8).
                 var cost = CallCost(cacheWrite: 0, other: 0, writtenAsRead: 0, known: true)
                 var rebuilt = (cost: 0, tokens: 0, asRead: 0)
+                var advisorCost = 0
                 var unpriced = Set<String>()
                 var consulted = false
                 for part in call.parts {
@@ -154,8 +162,9 @@ public final class UsageAnalyzer {
                         report.advisor.inputTokens += part.inputTokens
                         report.advisor.outputTokens += part.outputTokens
                         report.advisor.cost += partCost.total
+                        advisorCost += partCost.total
                     }
-                    if item.isRebuild, RebuildClassifier.isRebuild(part) {
+                    if item.isRebuild, RebuildClassifier.isRebuild(part, threshold: rebuildThreshold) {
                         rebuilt.cost += partCost.cacheWrite
                         rebuilt.tokens += part.cacheWriteTokens
                         rebuilt.asRead += partCost.writtenAsRead
@@ -174,17 +183,19 @@ public final class UsageAnalyzer {
                     report.rebuildTokens += rebuilt.tokens
                 }
 
-                // R7: subagents take all of their cost; R8: a rebuild's write goes to its cause.
+                // Advisor consults have their own bucket; R7: subagents take the rest of their cost;
+                // R8: a rebuild's write goes to its cause.
+                report.bucketCosts[.advisor, default: 0] += advisorCost
                 guard file.kind == .main else {
-                    report.bucketCosts[.subagents, default: 0] += cost.total
+                    report.bucketCosts[.subagents, default: 0] += cost.total - advisorCost
                     if item.isRebuild { report.subagentRebuildCount += 1 }
                     continue
                 }
                 guard item.isRebuild, let cause = item.cause else {
-                    report.bucketCosts[.normalWork, default: 0] += cost.total
+                    report.bucketCosts[.normalWork, default: 0] += cost.total - advisorCost
                     continue
                 }
-                report.bucketCosts[.normalWork, default: 0] += cost.total - rebuilt.cost
+                report.bucketCosts[.normalWork, default: 0] += cost.total - rebuilt.cost - advisorCost
                 report.bucketCosts[Self.bucket(of: cause), default: 0] += rebuilt.cost
                 report.mainRebuildCounts[cause, default: 0] += 1
                 var reducible = 0
@@ -214,7 +225,7 @@ public final class UsageAnalyzer {
                         previousTTL: item.previousTTL, previousModel: item.previous?.model, model: call.model,
                         previousVersion: item.previous?.version, version: call.version,
                         cacheWriteTokens: rebuilt.tokens, cacheWriteCost: rebuilt.cost,
-                        reducibleCost: reducible))
+                        reducibleCost: reducible, previousContextTokens: item.previous?.contextTokens))
             }
         }
         report.rebuilds.sort { ($0.timestamp, $0.messageID) < ($1.timestamp, $1.messageID) }
@@ -284,7 +295,8 @@ public enum ReportText {
     private static let bucketLabels: [(CostBucket, String)] = [
         (.normalWork, "normal work"), (.shortBreakRebuild, "rebuild after short break"),
         (.longBreakRebuild, "rebuild after long break"), (.sessionStartAndCompaction, "session start & compaction"),
-        (.subagents, "subagents"), (.modelChangeAndUpdate, "model change & update"), (.unknown, "unknown"),
+        (.subagents, "subagents"), (.advisor, "advisor"), (.modelChangeAndUpdate, "model change & update"),
+        (.unknown, "unknown"),
     ]
 
     public static func render(_ report: UsageReport, fromText: String, toText: String) -> String {
@@ -325,9 +337,8 @@ public enum ReportText {
             let advisor = report.advisor
             if advisor.calls > 0 {
                 lines.append(
-                    "advisor (in buckets) \(advisor.calls) calls, input=\(count(advisor.inputTokens)) "
-                        + "output=\(count(advisor.outputTokens)), \(money(advisor.cost)) "
-                        + "(\(percent(Double(advisor.cost) / Double(report.totalCost))) of cost)")
+                    "advisor calls       \(advisor.calls), input=\(count(advisor.inputTokens)) "
+                        + "output=\(count(advisor.outputTokens))")
             }
             lines.append("menu bar (idle rebuilds) \(percent(report.idleRebuildShare))")
             lines.append("reducible (short breaks) \(percent(report.reducibleShare))")

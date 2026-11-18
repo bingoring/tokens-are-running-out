@@ -181,4 +181,13 @@ struct RebuildClassifierTests {
         #expect(found["a"] == "sessionStart")
         #expect(found["b"] == nil)
     }
+
+    @Test("the rebuild threshold can be set per classification")
+    mutating func thresholdParameter() {
+        let events = [call("a", at: 0, write: 40_000)]
+        #expect(
+            RebuildClassifier.classify(events, kind: .main, from: 0, to: 1e12, threshold: 30_000).first?.isRebuild
+                == true)
+        #expect(RebuildClassifier.classify(events, kind: .main, from: 0, to: 1e12).first?.isRebuild == false)
+    }
 }

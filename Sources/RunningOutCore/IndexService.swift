@@ -9,8 +9,11 @@ public actor IndexService {
         indexer = try Indexer(root: root, databaseURL: databaseURL)
     }
 
-    public func report(from: Double, to: Double) throws -> UsageReport {
-        try UsageAnalyzer(indexer: indexer, prices: priceTable()).report(from: from, to: to)
+    public func report(from: Double, to: Double, rebuildThreshold: Int = RebuildClassifier.rebuildThreshold) throws
+        -> UsageReport
+    {
+        try UsageAnalyzer(indexer: indexer, prices: priceTable(), rebuildThreshold: rebuildThreshold)
+            .report(from: from, to: to)
     }
 
     /// Loaded on first use, so indexing never depends on the price table.
@@ -21,9 +24,11 @@ public actor IndexService {
         return loaded
     }
 
-    public func report(period: ReportPeriod, now: Date = Date()) throws -> UsageReport {
+    public func report(
+        period: ReportPeriod, now: Date = Date(), rebuildThreshold: Int = RebuildClassifier.rebuildThreshold
+    ) throws -> UsageReport {
         let window = period.window(now: now)
-        return try report(from: window.from, to: window.to)
+        return try report(from: window.from, to: window.to, rebuildThreshold: rebuildThreshold)
     }
 
     public func indexAll() throws -> IndexSummary { try indexer.indexAll() }
