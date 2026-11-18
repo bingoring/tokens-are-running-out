@@ -39,6 +39,12 @@ public struct IndexProgress: Sendable, Equatable {
     public var bytesTotal: Int64
     /// True when the index was empty: the first index after install or a schema change.
     public var isInitial: Bool
+
+    public init(bytesRead: Int64, bytesTotal: Int64, isInitial: Bool) {
+        self.bytesRead = bytesRead
+        self.bytesTotal = bytesTotal
+        self.isInitial = isInitial
+    }
 }
 
 /// Whether recent transcript lines still parse into calls (2-3 BR-H1).
@@ -56,6 +62,8 @@ public struct IndexHealth: Sendable, Equatable {
     public var mainLinesAppended = 0
     public var mainCallsAppended = 0
     public var kind = Kind.none
+
+    public init() {}
 }
 
 /// A session's latest call, for its cache expiry (2-3 BR-E2, BR-E3).
@@ -67,6 +75,19 @@ public struct LastCall: Sendable, Equatable {
     public var model: String
     public var contextTokens: Int
     public var title: String?
+
+    public init(
+        sessionID: String, file: URL, timestamp: Double, ttl: CacheTTL, model: String, contextTokens: Int,
+        title: String?
+    ) {
+        self.sessionID = sessionID
+        self.file = file
+        self.timestamp = timestamp
+        self.ttl = ttl
+        self.model = model
+        self.contextTokens = contextTokens
+        self.title = title
+    }
 }
 
 /// One event in a transcript, in file order.
