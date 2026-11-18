@@ -6,16 +6,26 @@ Read-only. Usage:
 
     python3 -I prototype/drain.py --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z
 
-Rules (design doc sections 6.1-6.4):
+Rules (design doc sections 6.1-6.4, with the 2-2 corrections in DECISIONS.md):
   * only `type == "assistant"` lines with `message.usage`, deduplicated by `message.id`
     across all transcripts: resumed or forked sessions copy earlier calls into a new file,
     so each call is counted once, in its owner file (see `owners`)
-  * a call is a rebuild when cache_creation >= 50,000 and cache_creation > cache_read
+  * a message's first line in a file fixes its place, time, model and version; its last line
+    in that file holds the final usage (Claude Code fills the usage in as the response streams)
+  * `usage.iterations` splits a call into steps; an `advisor_message` step runs on its own model
+    and is left out of the top-level input and output, so cost is the sum over the steps
+  * a step is a rebuild when it writes >= 50,000 cache tokens and more than it read; a call is a
+    rebuild when one of its main-model steps is (advisor steps never are)
   * main-session rebuild causes, checked in order: session start (no earlier call in the
     file), after compaction, model changed, expired (gap > TTL of the previous call),
     version changed, unknown
-  * cost is API-price-equivalent in units of base input: input 1, output 5,
-    cache read 0.1, 5m cache write 1.25, 1h cache write 2
+  * cost is the API list price per model from the app's `pricing.json` (official pricing page),
+    in integer nano-USD (tokens x thousandths of a USD per million tokens) so sums are exact;
+    a model id matches a table key exactly or with a date suffix (-YYYYMMDD); Claude Haiku 5.5
+    uses its long-context prices when a step's prompt is over 100,000 tokens; a model missing from
+    the table is priced as claude-opus-5-5 and reported as unpriced
+  * cost buckets (design 6.4): the cache-write cost of the steps that rebuilt goes to the cause,
+    the rest of that call to normal work; every subagent call goes to subagents
   * expired rebuilds split into short breaks (gap <= 3h) and long breaks (gap > 3h);
     only short breaks count as reducible (the user could have resumed before expiry)
 """
@@ -25,11 +35,18 @@ import datetime
 import glob
 import json
 import os
+import re
 
 THRESHOLD = 50_000
-WEIGHT = {"input": 1.0, "output": 5.0, "read": 0.1, "w5m": 1.25, "w1h": 2.0}
+TOKEN_LIMIT = 1_000_000_000
+DEFAULT_MODEL = "claude-opus-5-5"
+PRICING_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "Sources", "RunningOutCore", "Resources", "pricing.json"
+)
 TTL = {"1h": 3600, "5m": 300}
 SHORT_BREAK_HOURS = 3  # expired after a gap of at most this long: avoidable by resuming in time
+TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+DATED = re.compile(r"^(.*)-\d{8}$")
 
 
 def iso(ts):
@@ -38,29 +55,105 @@ def iso(ts):
 
 def ttl_of(usage, fallback):
     c = usage.get("cache_creation") or {}
-    if c.get("ephemeral_1h_input_tokens", 0):
+    if c.get("ephemeral_1h_input_tokens") or 0:
         return "1h"
-    if c.get("ephemeral_5m_input_tokens", 0):
+    if c.get("ephemeral_5m_input_tokens") or 0:
         return "5m"
     return fallback
 
 
-def write_cost(usage):
-    c = usage.get("cache_creation") or {}
-    w1 = c.get("ephemeral_1h_input_tokens", 0)
-    w5 = c.get("ephemeral_5m_input_tokens", 0)
-    if not (w1 or w5):
-        w1 = usage.get("cache_creation_input_tokens", 0)
-    return w1 * WEIGHT["w1h"] + w5 * WEIGHT["w5m"]
+def counts(step):
+    c = step.get("cache_creation") or {}
+    return [step.get(k) or 0 for k in TOKEN_KEYS] + [
+        c.get("ephemeral_1h_input_tokens") or 0, c.get("ephemeral_5m_input_tokens") or 0
+    ]
 
 
-def call_cost(usage):
-    return (
-        usage.get("input_tokens", 0) * WEIGHT["input"]
-        + usage.get("output_tokens", 0) * WEIGHT["output"]
-        + usage.get("cache_read_input_tokens", 0) * WEIGHT["read"]
-        + write_cost(usage)
-    )
+def is_count(v):
+    return type(v) is int
+
+
+def steps_of(usage):
+    """The iterations, or None when the field is missing, empty or not the expected shape."""
+    its = usage.get("iterations")
+    if not isinstance(its, list) or not its or not all(isinstance(i, dict) for i in its):
+        return None
+    for i in its:
+        c = i.get("cache_creation")
+        if c is not None and not isinstance(c, dict):
+            return None
+        values = [i.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in c] if c else [])
+        if any(v is not None and not is_count(v) for v in values):
+            return None
+    return its
+
+
+def parts(model, usage):
+    """(kind, model, step) per step; the top-level usage is one step when there are no iterations."""
+    its = steps_of(usage)
+    if its is None:
+        return [("message", model, usage)]
+    return [
+        ("advisor" if i.get("type") == "advisor_message" else "message", i.get("model") or model, i) for i in its
+    ]
+
+
+def rebuilt(kind, step):
+    write = step.get("cache_creation_input_tokens") or 0
+    return kind == "message" and write >= THRESHOLD and write > (step.get("cache_read_input_tokens") or 0)
+
+
+class Pricing:
+    """Nano-USD per step from the official per-model list prices."""
+
+    KEYS = ("input", "cache_write_5m", "cache_write_1h", "cache_read", "output")
+
+    def __init__(self, path):
+        with open(path) as fh:
+            raw = json.load(fh)["models"]
+
+        def milli(model, p):
+            out = {}
+            for k in self.KEYS:
+                v = p[k]
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                    raise SystemExit(f"{model}: {k} must be a non-negative number")
+                if abs(round(v * 1000) - v * 1000) >= 1e-6:
+                    raise SystemExit(f"{model}: {k} has more than three decimals")
+                out[k] = round(v * 1000)
+            return out
+
+        self.models = {}
+        for model, p in raw.items():
+            entry = milli(model, p)
+            if p.get("long_context"):
+                lc = p["long_context"]
+                entry["long_context"] = {"over_prompt_tokens": lc["over_prompt_tokens"], **milli(model, lc)}
+            self.models[model] = entry
+        if DEFAULT_MODEL not in self.models:
+            raise SystemExit(f"pricing table lacks the fallback model {DEFAULT_MODEL}")
+
+    def prices(self, model, prompt_tokens):
+        """Returns (prices, known)."""
+        key = model if model in self.models else None
+        if key is None:
+            dated = DATED.match(model)
+            key = dated.group(1) if dated and dated.group(1) in self.models else None
+        p = self.models[key or DEFAULT_MODEL]
+        long_context = p.get("long_context")
+        if long_context and prompt_tokens > long_context["over_prompt_tokens"]:
+            return long_context, key is not None
+        return p, key is not None
+
+    def costs(self, model, step):
+        """Returns (cache-write cost, all other cost, cost of the written tokens as a cache read, known)."""
+        inp, out, read, written, _, w5 = counts(step)
+        w5 = min(w5, written)
+        w1 = written - w5  # writes the TTL breakdown does not cover are priced as one-hour writes
+        p, known = self.prices(model, inp + read + written)
+        write = w1 * p["cache_write_1h"] + w5 * p["cache_write_5m"]
+        other = inp * p["input"] + out * p["output"] + read * p["cache_read"]
+        return write, other, written * p["cache_read"], known
 
 
 def iter_calls(path):
@@ -85,10 +178,34 @@ def iter_calls(path):
             u = m.get("usage") or {}
             if not u or not m.get("id") or not m.get("model") or m.get("model") == "<synthetic>":
                 continue
+            c = u.get("cache_creation")
+            if c is not None and not isinstance(c, dict):
+                continue
+            top = [u.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in c] if c else [])
+            if any(v is not None and not is_count(v) for v in top):
+                continue
+            # A count outside 0..1e9 is not real usage: the line is malformed and skipped.
+            values = counts(u) + [v for _, _, s in parts(m["model"], u) for v in counts(s)]
+            if any(v < 0 or v > TOKEN_LIMIT for v in values):
+                continue
             yield m, u, o
 
 
-def owners(files):
+def read_file(path):
+    """Events in file order (None for a compaction mark, else (message, record) at the message's
+    first line), and the final usage of each message in this file."""
+    events, final = [], {}
+    for m, u, o in iter_calls(path):
+        if m is None:
+            events.append(None)
+            continue
+        if m["id"] not in final:
+            events.append((m, o))
+        final[m["id"]] = u
+    return events, final
+
+
+def owners(files, root):
     """Pick one owning file per message.id.
 
     Resumed or forked sessions copy earlier messages into a new transcript, so the same
@@ -98,7 +215,7 @@ def owners(files):
     """
     best = {}
     for path in files:
-        is_sub = "/subagents/" in path
+        is_sub = "subagents" in os.path.relpath(path, root).split(os.sep)
         file_sid = os.path.basename(path)[:-6]
         born = os.stat(path).st_birthtime
         seen = set()
@@ -118,89 +235,122 @@ def main():
     p.add_argument("--from", dest="lo", required=True, help="inclusive, ISO 8601 UTC")
     p.add_argument("--to", dest="hi", required=True, help="exclusive, ISO 8601 UTC")
     p.add_argument("--root", default=os.path.expanduser("~/.claude/projects"))
+    p.add_argument("--pricing", default=PRICING_PATH)
     a = p.parse_args()
     lo, hi = iso(a.lo), iso(a.hi)
 
     files = glob.glob(f"{a.root}/*/*.jsonl") + glob.glob(f"{a.root}/*/*/subagents/agent-*.jsonl")
+    pricing = Pricing(a.pricing)
     calls = 0
     tokens = collections.Counter()
-    total_cost = 0.0
+    total_cost = 0
     rebuild_n = rebuild_tok = 0
     sub_rebuild_n = 0
     causes = collections.Counter()
-    expired_tok = 0
-    expired_write_cost = expired_reducible = 0.0
-    breaks = {"short break": [0, 0, 0.0], "long break": [0, 0, 0.0]}
+    breaks = {"short break": [0, 0, 0], "long break": [0, 0, 0]}
+    reducible = 0
+    buckets = collections.Counter()
+    advisor = [0, 0, 0, 0]  # calls, input, output, cost
+    unpriced = collections.Counter()
+    bucket_of = {
+        "session start": "session start & compaction",
+        "after compaction": "session start & compaction",
+        "model changed": "model change & update",
+        "version changed": "model change & update",
+        "unknown": "unknown",
+    }
 
-    owner = owners(files)
+    owner = owners(files, a.root)
 
     for path in files:
-        if os.path.getmtime(path) < lo:
-            continue
-        is_sub = "/subagents/" in path
-        seen = set()
+        is_sub = "subagents" in os.path.relpath(path, a.root).split(os.sep)
         last_t = last_model = last_version = None
         last_ttl = "5m" if is_sub else "1h"
         compacted = False
-        if True:
-            for m, u, o in iter_calls(path):
-                if m is None:
-                    compacted = True
-                    continue
-                mid = m["id"]
-                if mid in seen:
-                    continue
-                seen.add(mid)
-                t = iso(o["timestamp"])
+        events, final = read_file(path)
+        for event in events:
+            if event is None:
+                compacted = True
+                continue
+            m, o = event
+            mid = m["id"]
+            u = final[mid]
+            t = iso(o["timestamp"])
+            steps = parts(m["model"], u)
+            is_rebuild = any(rebuilt(kind, step) for kind, _, step in steps)
 
-                # Copied calls (owned by another file) still set this file's context,
-                # but are counted only in their owner.
-                if lo <= t < hi and owner.get(mid) == path:
-                    calls += 1
-                    cc = u.get("cache_creation_input_tokens", 0)
-                    cr = u.get("cache_read_input_tokens", 0)
-                    tokens["input"] += u.get("input_tokens", 0)
-                    tokens["output"] += u.get("output_tokens", 0)
-                    tokens["cache_read"] += cr
-                    tokens["cache_write"] += cc
-                    total_cost += call_cost(u)
+            # Copied calls (owned by another file) still set this file's context,
+            # but are counted only in their owner.
+            if lo <= t < hi and owner.get(mid) == path:
+                calls += 1
+                cc = u.get("cache_creation_input_tokens") or 0
+                tokens["input"] += u.get("input_tokens") or 0
+                tokens["output"] += u.get("output_tokens") or 0
+                tokens["cache_read"] += u.get("cache_read_input_tokens") or 0
+                tokens["cache_write"] += cc
+                cost = rb_write = rb_tok = rb_as_read = 0
+                consulted = False
+                missing = set()
+                for kind, model, step in steps:
+                    write, other, as_read, known = pricing.costs(model, step)
+                    if not known:
+                        missing.add(model)
+                    cost += write + other
+                    if kind == "advisor":
+                        consulted = True
+                        advisor[1] += step.get("input_tokens") or 0
+                        advisor[2] += step.get("output_tokens") or 0
+                        advisor[3] += write + other
+                    if is_rebuild and rebuilt(kind, step):
+                        rb_write += write
+                        rb_tok += step.get("cache_creation_input_tokens") or 0
+                        rb_as_read += as_read
+                advisor[0] += consulted
+                for model in missing:
+                    unpriced[model] += 1
+                total_cost += cost
 
-                    if cc >= THRESHOLD and cc > cr:
+                if is_sub:
+                    buckets["subagents"] += cost
+                    if is_rebuild:
                         rebuild_n += 1
-                        rebuild_tok += cc
-                        if is_sub:
-                            sub_rebuild_n += 1
-                        else:
-                            if last_t is None:
-                                cause = "session start"
-                            elif compacted:
-                                cause = "after compaction"
-                            elif m.get("model") != last_model:
-                                cause = "model changed"
-                            elif t - last_t > TTL[last_ttl]:
-                                cause = "expired"
-                            elif o.get("version") != last_version:
-                                cause = "version changed"
-                            else:
-                                cause = "unknown"
-                            causes[cause] += 1
-                            if cause == "expired":
-                                wc = write_cost(u)
-                                expired_tok += cc
-                                expired_write_cost += wc
-                                gap_h = (t - last_t) / 3600
-                                kind = "short break" if gap_h <= SHORT_BREAK_HOURS else "long break"
-                                breaks[kind][0] += 1
-                                breaks[kind][1] += cc
-                                breaks[kind][2] += wc
-                                if kind == "short break":
-                                    expired_reducible += wc - cc * WEIGHT["read"]
+                        rebuild_tok += rb_tok
+                        sub_rebuild_n += 1
+                elif not is_rebuild:
+                    buckets["normal work"] += cost
+                else:
+                    rebuild_n += 1
+                    rebuild_tok += rb_tok
+                    if last_t is None:
+                        cause = "session start"
+                    elif compacted:
+                        cause = "after compaction"
+                    elif m.get("model") != last_model:
+                        cause = "model changed"
+                    elif t - last_t > TTL[last_ttl]:
+                        cause = "expired"
+                    elif o.get("version") != last_version:
+                        cause = "version changed"
+                    else:
+                        cause = "unknown"
+                    causes[cause] += 1
+                    buckets["normal work"] += cost - rb_write
+                    if cause == "expired":
+                        kind = "short break" if (t - last_t) / 3600 <= SHORT_BREAK_HOURS else "long break"
+                        breaks[kind][0] += 1
+                        breaks[kind][1] += rb_tok
+                        breaks[kind][2] += rb_write
+                        buckets["rebuild after " + kind] += rb_write
+                        if kind == "short break":
+                            reducible += rb_write - rb_as_read
+                    else:
+                        buckets[bucket_of[cause]] += rb_write
 
-                last_t = t
-                last_model = m.get("model")
-                last_version = o.get("version")
-                last_ttl = ttl_of(u, last_ttl)
-                compacted = False
+            last_t = t
+            last_model = m.get("model")
+            last_version = o.get("version")
+            last_ttl = ttl_of(u, last_ttl)
+            compacted = False
 
     print(f"window              {a.lo} .. {a.hi}")
     print(f"api calls           {calls:,}")
@@ -208,13 +358,23 @@ def main():
     share = rebuild_tok / tokens["cache_write"] if tokens["cache_write"] else 0
     print(f"rebuilds            {rebuild_n} calls, {rebuild_tok:,} tokens ({share:.1%} of cache writes)")
     print(f"  in subagents      {sub_rebuild_n}")
-    print(f"  in main sessions  {sum(causes.values())}: " + ", ".join(f"{k} {v}" for k, v in causes.most_common()))
+    ordered = sorted(causes.items(), key=lambda kv: (-kv[1], kv[0]))
+    print(f"  in main sessions  {sum(causes.values())}: " + ", ".join(f"{k} {v}" for k, v in ordered))
+    for kind, (n, tok, _) in breaks.items():
+        print(f"  expired, {kind:<12} {n} calls, {tok:,} tokens")
+    print(f"cost (API list)     ${total_cost / 1e9:,.2f}")
     if total_cost:
-        print(f"expired rebuilds    {causes['expired']} calls, {expired_tok:,} tokens, cache-write cost {expired_write_cost / total_cost:.1%} of all cost")
-        for kind, (n, tok, wc) in breaks.items():
-            print(f"  {kind:<17} {n} calls, {tok:,} tokens, cache-write cost {wc / total_cost:.1%}")
-        print(f"  reducible         {expired_reducible / total_cost:.1%} of all cost (short breaks only)")
-
+        for name in ["normal work", "rebuild after short break", "rebuild after long break",
+                     "session start & compaction", "subagents", "model change & update", "unknown"]:
+            print(f"  {name:<27} {buckets[name] / total_cost:6.1%}  ${buckets[name] / 1e9:,.2f}")
+        if advisor[0]:
+            print(f"advisor (in buckets) {advisor[0]} calls, input={advisor[1]:,} output={advisor[2]:,}, "
+                  f"${advisor[3] / 1e9:,.2f} ({advisor[3] / total_cost:.1%} of cost)")
+        idle = breaks["short break"][2] + breaks["long break"][2]
+        print(f"menu bar (idle rebuilds) {idle / total_cost:.1%}")
+        print(f"reducible (short breaks) {reducible / total_cost:.1%}")
+    if unpriced:
+        print("unpriced models     " + ", ".join(f"{k} x{v}" for k, v in sorted(unpriced.items())))
 
 if __name__ == "__main__":
     main()

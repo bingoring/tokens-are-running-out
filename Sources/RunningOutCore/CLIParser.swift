@@ -4,6 +4,7 @@ public enum CLICommand: Equatable, Sendable {
     case index(root: URL, database: URL)
     case stats(root: URL, database: URL, from: Double, to: Double)
     case watch(root: URL, database: URL)
+    case report(root: URL, database: URL, from: Double, to: Double)
 }
 
 public struct CLIError: Error, Equatable {
@@ -19,6 +20,7 @@ public enum CLIParser {
     public static let usage = """
         usage: running-out index [--root PATH] [--db PATH]
                running-out stats --from ISO8601 --to ISO8601 [--root PATH] [--db PATH]
+               running-out report --from ISO8601 --to ISO8601 [--root PATH] [--db PATH]
                running-out watch [--root PATH] [--db PATH]
         """
 
@@ -56,23 +58,26 @@ public enum CLIParser {
             return .index(root: root, database: database)
         case "watch":
             return .watch(root: root, database: database)
-        case "stats":
+        case "stats", "report":
             guard let fromText = options["--from"], let toText = options["--to"] else {
-                throw .usage("stats needs --from and --to.")
+                throw .usage("\(command) needs --from and --to.")
             }
             guard let from = strictUTC(fromText), let to = strictUTC(toText) else {
                 throw .usage("Use ISO 8601 UTC, e.g. 2026-11-10T00:00:00Z.")
             }
             guard from < to else { throw .usage("--from must be earlier than --to.") }
-            return .stats(root: root, database: database, from: from, to: to)
+            return command == "stats"
+                ? .stats(root: root, database: database, from: from, to: to)
+                : .report(root: root, database: database, from: from, to: to)
         default:
             throw .usage("Unknown command \(command).")
         }
     }
 
-    /// Accepts only full UTC timestamps such as `2026-11-10T00:00:00Z`.
+    /// Accepts only full UTC timestamps in whole seconds, such as `2026-11-10T00:00:00Z`, so the window
+    /// printed back is exactly the window given.
     private static func strictUTC(_ text: String) -> Double? {
-        guard text.hasSuffix("Z"), text.contains("T") else { return nil }
+        guard text.wholeMatch(of: #/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/#) != nil else { return nil }
         return Timestamp.parse(text)
     }
 }

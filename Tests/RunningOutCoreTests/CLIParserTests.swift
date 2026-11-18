@@ -65,6 +65,23 @@ struct CLIParserTests {
         #expect(exitCode("index --root /r --db /rr/index.sqlite") == nil)
     }
 
+    @Test("report takes a window like stats")
+    func report() throws {
+        let command = try parse("report --root /r --db /d.sqlite --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z")
+        #expect(
+            command
+                == .report(
+                    root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite"),
+                    from: 1_794_268_800, to: 1_794_873_600))
+        #expect(exitCode("report --from 2026-11-10T00:00:00Z") == 2)
+    }
+
+    @Test("a window boundary with fractional seconds is refused, so the printed window is exact")
+    func wholeSecondsOnly() {
+        #expect(exitCode("report --from 2026-11-10T00:00:00.5Z --to 2026-11-17T00:00:00Z") == 2)
+        #expect(exitCode("stats --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00.000Z") == 2)
+    }
+
     @Test("watch accepts the same path options as index")
     func watch() throws {
         #expect(

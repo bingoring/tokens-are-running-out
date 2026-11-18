@@ -68,6 +68,16 @@ func run(_ command: CLICommand) async throws {
         let mismatches = try await service.usageMismatchCount()
         if mismatches > 0 { warn("calls whose copies disagree on usage: \(mismatches)") }
 
+    case .report(let root, let database, let from, let to):
+        let service = openService(root: root, database: database)
+        _ = report(try await service.indexAll())
+        let style = Date.ISO8601FormatStyle()
+        let text = ReportText.render(
+            try await service.report(from: from, to: to),
+            fromText: style.format(Date(timeIntervalSince1970: from)),
+            toText: style.format(Date(timeIntervalSince1970: to)))
+        print(text)
+
     case .watch(let root, let database):
         let service = openService(root: root, database: database)
         // Start watching before the first scan, so changes made during the scan are queued, not lost.

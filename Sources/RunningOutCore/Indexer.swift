@@ -51,7 +51,7 @@ public struct TimelineEvent: Sendable, Equatable {
 public final class Indexer {
     public let root: URL
     private let db: SQLiteDatabase
-    private static let schemaVersion = "2"
+    private static let schemaVersion = "3"
     /// Bytes at the start of a file that are fingerprinted to notice in-place rewrites.
     private static let headLimit = 1024
 
@@ -160,7 +160,7 @@ public final class Indexer {
             var lines = 0
             var candidates = 0
             var failures = 0
-            var copied = Set<String>()
+            var unsettled = Set<String>()
             let nextOffset = try LineReader.readCompleteLines(at: ref.url, from: file.offset) { line in
                 lines += 1
                 switch RecordParser.parse(line) {
@@ -184,16 +184,22 @@ public final class Indexer {
                         [.int(file.id), .int(seq), .text(sessionID), .text(title)])
                 case .call(let call):
                     candidates += 1
-                    guard try insertOccurrence(call, fileID: file.id, seq: seq) else { return }  // R5
-                    seq += 1
-                    if try insertCall(call, ownerFileID: file.id) {
-                        summary.callsAdded += 1
-                    } else {
-                        copied.insert(call.messageID)  // also in another file: settle the owner below
+                    switch try recordOccurrence(call, fileID: file.id, seq: seq) {
+                    case .inserted:
+                        seq += 1
+                        if try insertCall(call, ownerFileID: file.id) {
+                            summary.callsAdded += 1
+                        } else {
+                            unsettled.insert(call.messageID)  // also in another file: settle the owner below
+                        }
+                    case .updated:
+                        unsettled.insert(call.messageID)  // the owner's values may have changed
+                    case .unchanged:
+                        break
                     }
                 }
             }
-            for messageID in copied { try settleOwner(of: messageID) }
+            for messageID in unsettled { try settleOwner(of: messageID) }
             if nextOffset > file.offset { summary.filesRead = 1 }
             summary.parseFailures = failures
             let head = try Indexer.head(of: ref.url, length: min(Indexer.headLimit, Int(nextOffset)))
@@ -227,6 +233,23 @@ public final class Indexer {
         } ?? UsageTotals()
     }
 
+    /// Files that own at least one call in `[from, to)`, for analysis.
+    public func ownedFiles(from: Double, to: Double) throws -> [TranscriptRef] {
+        var refs: [TranscriptRef] = []
+        try db.query(
+            """
+            SELECT DISTINCT f.path, f.kind, f.session_id, f.agent_id
+            FROM calls c JOIN files f ON f.id = c.owner_file_id WHERE c.ts >= ? AND c.ts < ? ORDER BY f.path
+            """, [.double(from), .double(to)]
+        ) { s in
+            refs.append(
+                TranscriptRef(
+                    url: URL(fileURLWithPath: s.text(0)), kind: TranscriptKind(rawValue: s.text(1)) ?? .main,
+                    sessionID: s.text(2), agentID: s.optionalText(3)))
+        }
+        return refs
+    }
+
     /// The file whose copy of the call is counted (rule R4).
     public func owner(of messageID: String) throws -> URL? {
         try db.queryRow(
@@ -243,7 +266,7 @@ public final class Indexer {
             """
             SELECT o.seq, o.message_id, o.ts, o.model, o.version, o.line_session_id, o.input_tokens,
             o.output_tokens, o.cache_read_tokens, o.cache_write_tokens, o.cache_write_1h, o.cache_write_5m,
-            o.ttl, c.owner_file_id
+            o.ttl, c.owner_file_id, o.iterations
             FROM occurrences o JOIN calls c ON c.message_id = o.message_id WHERE o.file_id = ?
             """, [.int(row.id)]
         ) { s in
@@ -251,7 +274,8 @@ public final class Indexer {
                 messageID: s.text(1), timestamp: s.double(2), model: s.text(3), version: s.optionalText(4),
                 lineSessionID: s.optionalText(5), inputTokens: s.int(6), outputTokens: s.int(7),
                 cacheReadTokens: s.int(8), cacheWriteTokens: s.int(9), cacheWrite1h: s.int(10),
-                cacheWrite5m: s.int(11), ttl: s.optionalText(12).flatMap(CacheTTL.init(rawValue:)))
+                cacheWrite5m: s.int(11), ttl: s.optionalText(12).flatMap(CacheTTL.init(rawValue:)),
+                iterations: Indexer.decodeIterations(s.optionalText(14)))
             events.append(TimelineEvent(seq: s.int(0), kind: .call(record, owned: s.int(13) == row.id)))
         }
         try db.query("SELECT seq, ts FROM marks WHERE file_id = ?", [.int(row.id)]) { s in
@@ -316,7 +340,7 @@ public final class Indexer {
                 ts REAL NOT NULL, model TEXT NOT NULL, version TEXT, input_tokens INTEGER NOT NULL,
                 output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
                 cache_write_tokens INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL,
-                cache_write_5m INTEGER NOT NULL, ttl TEXT, PRIMARY KEY(file_id, message_id));
+                cache_write_5m INTEGER NOT NULL, ttl TEXT, iterations TEXT, PRIMARY KEY(file_id, message_id));
             CREATE INDEX occurrences_message ON occurrences(message_id);
             CREATE TABLE calls(
                 message_id TEXT PRIMARY KEY, owner_file_id INTEGER NOT NULL, ts REAL NOT NULL,
@@ -355,21 +379,51 @@ public final class Indexer {
         return row
     }
 
-    /// R5: returns false when this file already has the message.
-    private func insertOccurrence(_ call: CallRecord, fileID: Int, seq: Int) throws -> Bool {
+    private enum OccurrenceChange {
+        case inserted
+        case updated
+        case unchanged
+    }
+
+    /// R5: a message's first line in a file fixes its place, time, model and version there. Claude Code writes
+    /// a line per content block and fills in the usage as the response streams, so each later line of the same
+    /// message replaces the usage, and the last line's usage is final.
+    private func recordOccurrence(_ call: CallRecord, fileID: Int, seq: Int) throws -> OccurrenceChange {
+        let usage: [SQLValue] = [
+            .int(call.inputTokens), .int(call.outputTokens), .int(call.cacheReadTokens), .int(call.cacheWriteTokens),
+            .int(call.cacheWrite1h), .int(call.cacheWrite5m), .optionalText(call.ttl?.rawValue),
+            .optionalText(Indexer.encodeIterations(call.iterations)),
+        ]
         try db.run(
             """
             INSERT INTO occurrences(file_id, message_id, seq, line_session_id, ts, model, version, input_tokens,
-            output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h, cache_write_5m, ttl)
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_id, message_id) DO NOTHING
+            output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h, cache_write_5m, ttl, iterations)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_id, message_id) DO NOTHING
             """,
             [
                 .int(fileID), .text(call.messageID), .int(seq), .optionalText(call.lineSessionID),
-                .double(call.timestamp), .text(call.model), .optionalText(call.version), .int(call.inputTokens),
-                .int(call.outputTokens), .int(call.cacheReadTokens), .int(call.cacheWriteTokens),
-                .int(call.cacheWrite1h), .int(call.cacheWrite5m), .optionalText(call.ttl?.rawValue),
-            ])
-        return db.changes > 0
+                .double(call.timestamp), .text(call.model), .optionalText(call.version),
+            ] + usage)
+        if db.changes > 0 { return .inserted }
+        try db.run(
+            """
+            UPDATE occurrences SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_write_tokens = ?,
+            cache_write_1h = ?, cache_write_5m = ?, ttl = ?, iterations = ?
+            WHERE file_id = ? AND message_id = ? AND (input_tokens IS NOT ? OR output_tokens IS NOT ?
+            OR cache_read_tokens IS NOT ? OR cache_write_tokens IS NOT ? OR cache_write_1h IS NOT ?
+            OR cache_write_5m IS NOT ? OR ttl IS NOT ? OR iterations IS NOT ?)
+            """, usage + [.int(fileID), .text(call.messageID)] + usage)
+        return db.changes > 0 ? .updated : .unchanged
+    }
+
+    private static func encodeIterations(_ iterations: [UsagePart]) -> String? {
+        guard !iterations.isEmpty, let data = try? JSONEncoder().encode(iterations) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeIterations(_ text: String?) -> [UsagePart] {
+        guard let text else { return [] }
+        return (try? JSONDecoder().decode([UsagePart].self, from: Data(text.utf8))) ?? []
     }
 
     /// Returns false when the call already exists because another file has a copy of it.
