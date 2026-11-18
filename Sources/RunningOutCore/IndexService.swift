@@ -31,7 +31,19 @@ public actor IndexService {
         return try report(from: window.from, to: window.to, rebuildThreshold: rebuildThreshold)
     }
 
-    public func indexAll() throws -> IndexSummary { try indexer.indexAll() }
+    public func indexAll(progress: (@Sendable (IndexProgress) -> Void)? = nil) throws -> IndexSummary {
+        try indexer.indexAll(progress: progress)
+    }
+
+    public func health(now: Double = Date().timeIntervalSince1970) throws -> IndexHealth {
+        try indexer.health(now: now)
+    }
+
+    public func lastCall(ofSession sessionID: String) throws -> LastCall? { try indexer.lastCall(ofSession: sessionID) }
+
+    public func mainSessions(withCallsSince since: Double) throws -> [String] {
+        try indexer.mainSessions(withCallsSince: since)
+    }
 
     public func update(paths: [URL]) throws -> IndexSummary { try indexer.update(paths: paths) }
 

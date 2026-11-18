@@ -388,4 +388,131 @@ struct IndexerTests {
         #expect(try everything(indexer) == UsageTotals(calls: 1, inputTokens: 2, outputTokens: 500))
         #expect(try calls(indexer, in: file).first?.outputTokens == 500)
     }
+
+    // MARK: - Health, last call, progress
+
+    private func assistantLine(_ id: String, at timestamp: String, usageKey: String = "usage") -> String {
+        #"{"type":"assistant","timestamp":"\#(timestamp)","sessionId":"s1","message":{"id":"\#(id)","model":"claude-opus-5-5","\#(usageKey)":{"output_tokens":1}}}"#
+            + "\n"
+    }
+
+    @Test("assistant lines that stop being calls raise a format change: renamed usage or a missing id")
+    func formatChangeFromAssistantLines() throws {
+        for broken in ["renamed", "noID"] {
+            let dir = try TempDir()
+            var text = ""
+            for n in 0..<60 {
+                let at = "2026-11-10T00:\(String(format: "%02d", n)):00Z"
+                text +=
+                    broken == "renamed"
+                    ? assistantLine("m\(n)", at: at, usageKey: "usage_v2")
+                    : #"{"type":"assistant","timestamp":"\#(at)","message":{"model":"claude-opus-5-5","usage":{"output_tokens":1}}}"#
+                        + "\n"
+            }
+            try dir.write(text, to: "projects/-p/s1.jsonl")
+            let indexer = try makeIndexer(dir)
+            try indexer.indexAll()
+            let health = try indexer.health(now: nov10 + 86_400)
+            #expect(health.kind == .unreadableLines(share: 1), "\(broken)")
+            #expect(health.assistantLines == 60)
+        }
+    }
+
+    @Test("synthetic messages among normal calls do not raise a format change")
+    func syntheticIsHealthy() throws {
+        let dir = try TempDir()
+        var text = ""
+        for n in 0..<99 { text += assistantLine("m\(n)", at: "2026-11-10T01:\(String(format: "%02d", n % 60)):00Z") }
+        text +=
+            #"{"type":"assistant","timestamp":"2026-11-10T02:00:00Z","message":{"id":"x","model":"<synthetic>","usage":{"output_tokens":0}}}"#
+            + "\n"
+        try dir.write(text, to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        let health = try indexer.health(now: nov10 + 86_400)
+        #expect(health.kind == .none)
+        #expect(health.assistantWithoutCall == 1)
+    }
+
+    @Test("assistant lines older than seven days do not count, so old history never raises the banner")
+    func oldLinesIgnored() throws {
+        let dir = try TempDir()
+        var text = ""
+        for n in 0..<60 {
+            text += assistantLine("m\(n)", at: "2026-10-01T00:\(String(format: "%02d", n)):00Z", usageKey: "u")
+        }
+        try dir.write(text, to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        #expect(try indexer.health(now: nov10).kind == .none)
+    }
+
+    @Test("main transcripts that grow by 200 lines with no calls after the first index raise a format change")
+    func formatChangeFromNoCalls() throws {
+        let dir = try TempDir()
+        let file = try dir.write(
+            Fixture.call(id: "m0", at: "2026-11-10T00:00:00Z", session: "s1"), to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        // The first index read old lines; only what is appended afterwards counts for this rule.
+        #expect(try indexer.health(now: Date().timeIntervalSince1970).kind == .none)
+        var appended = ""
+        for n in 0..<200 { appended += #"{"type":"reply","id":"r\#(n)","tokens":{"out":1}}"# + "\n" }
+        try dir.append(appended, to: file)
+        try indexer.update(paths: [file])
+        #expect(try indexer.health(now: Date().timeIntervalSince1970).kind == .noCalls)
+    }
+
+    @Test("the first index of 200 lines with no calls is not a format change")
+    func firstIndexWithoutCallsIsHealthy() throws {
+        let dir = try TempDir()
+        var text = ""
+        for n in 0..<200 { text += #"{"type":"user","id":"u\#(n)"}"# + "\n" }
+        try dir.write(text, to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        #expect(try indexer.health(now: Date().timeIntervalSince1970).kind == .none)
+    }
+
+    @Test("a session's last call carries its final usage, its context size and an inherited TTL")
+    func lastCallOfSession() throws {
+        let dir = try TempDir()
+        try dir.write(
+            Fixture.title("Refactor parser", session: "s1")
+                + Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", write: 80_000, ttl: "1h")
+                + Fixture.call(id: "m2", at: "2026-11-10T00:10:00Z", session: "s1", output: 5, read: 80_000)
+                + Fixture.call(
+                    id: "m2", at: "2026-11-10T00:10:00Z", session: "s1", input: 3, output: 900, read: 80_000,
+                    write: 2_000, ttl: "none"),
+            to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        let last = try #require(try indexer.lastCall(ofSession: "s1"))
+        #expect(last.timestamp == nov10 + 600)
+        #expect(last.ttl == .oneHour)
+        #expect(last.contextTokens == 3 + 80_000 + 2_000)
+        #expect(last.title == "Refactor parser")
+        #expect(try indexer.lastCall(ofSession: "missing") == nil)
+        #expect(try indexer.mainSessions(withCallsSince: nov10 + 300) == ["s1"])
+        #expect(try indexer.mainSessions(withCallsSince: nov10 + 700).isEmpty)
+    }
+
+    @Test("indexing reports progress in bytes, and only the first index is initial")
+    func progress() throws {
+        let dir = try TempDir()
+        let file = try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1"), to: "projects/-p/s1.jsonl")
+        try dir.write(Fixture.call(id: "m2", at: "2026-11-10T00:00:00Z", session: "s2"), to: "projects/-p/s2.jsonl")
+        let indexer = try makeIndexer(dir)
+        var seen: [IndexProgress] = []
+        try indexer.indexAll { seen.append($0) }
+        let size = Int64(try Data(contentsOf: file).count)
+        #expect(seen.last?.bytesRead == seen.last?.bytesTotal)
+        #expect(seen.last?.bytesTotal ?? 0 >= size)
+        #expect(seen.allSatisfy { $0.isInitial })
+        seen = []
+        try indexer.indexAll { seen.append($0) }
+        #expect(seen.allSatisfy { !$0.isInitial })
+        #expect(seen.last?.bytesTotal == 0)
+    }
 }

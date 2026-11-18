@@ -4,6 +4,7 @@ public enum CLICommand: Equatable, Sendable {
     case index(root: URL, database: URL)
     case stats(root: URL, database: URL, from: Double, to: Double)
     case watch(root: URL, database: URL)
+    case health(root: URL, database: URL)
     case report(root: URL, database: URL, from: Double, to: Double, rebuildThreshold: Int)
 }
 
@@ -22,6 +23,7 @@ public enum CLIParser {
                running-out stats --from ISO8601 --to ISO8601 [--root PATH] [--db PATH]
                running-out report --from ISO8601 --to ISO8601 [--rebuild-threshold TOKENS] [--root PATH] [--db PATH]
                running-out watch [--root PATH] [--db PATH]
+               running-out health [--root PATH] [--db PATH]
         """
 
     public static func defaultRoot(home: URL) -> URL {
@@ -60,6 +62,8 @@ public enum CLIParser {
             return .index(root: root, database: database)
         case "watch":
             return .watch(root: root, database: database)
+        case "health":
+            return .health(root: root, database: database)
         case "stats", "report":
             guard let fromText = options["--from"], let toText = options["--to"] else {
                 throw .usage("\(command) needs --from and --to.")

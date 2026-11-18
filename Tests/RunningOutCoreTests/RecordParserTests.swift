@@ -77,8 +77,8 @@ struct RecordParserTests {
             #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x","usage":{}}}"#
         let emptyID =
             #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"","model":"x","usage":{"output_tokens":1}}}"#
-        #expect(parse(emptyUsage) == .rejected)
-        #expect(parse(emptyID) == .rejected)
+        #expect(parse(emptyUsage) == .assistantWithoutCall(timestamp: 1_794_268_800))
+        #expect(parse(emptyID) == .assistantWithoutCall(timestamp: 1_794_268_800))
     }
 
     @Test("synthetic messages are not API calls")
@@ -86,24 +86,24 @@ struct RecordParserTests {
         let line = """
             {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"<synthetic>","usage":{}}}
             """
-        #expect(parse(line) == .rejected)
+        #expect(parse(line) == .assistantWithoutCall(timestamp: 1_794_268_800))
     }
 
-    @Test("an assistant line without usage is rejected even if the word appears in its text")
+    @Test("an assistant line without usage is not a call even if the word appears in its text")
     func assistantWithoutUsage() {
         let line = """
             {"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x",\
             "content":[{"type":"text","text":"usage"}]}}
             """
-        #expect(parse(line) == .rejected)
+        #expect(parse(line) == .assistantWithoutCall(timestamp: 1_794_268_800))
     }
 
-    @Test("lines missing an id or a timestamp are rejected")
+    @Test("assistant lines missing an id or a timestamp are not calls")
     func missingIdentity() {
         let noID = #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"model":"x","usage":{}}}"#
         let noTimestamp = #"{"type":"assistant","message":{"id":"m","model":"x","usage":{}}}"#
-        #expect(parse(noID) == .rejected)
-        #expect(parse(noTimestamp) == .rejected)
+        #expect(parse(noID) == .assistantWithoutCall(timestamp: 1_794_268_800))
+        #expect(parse(noTimestamp) == .assistantWithoutCall(timestamp: nil))
     }
 
     @Test("other record types that echo assistant usage are rejected")
@@ -209,5 +209,18 @@ struct RecordParserTests {
             Issue.record("one billion is still a valid count")
             return
         }
+    }
+
+    @Test("an assistant line whose usage field was renamed is still seen, so a format change can be noticed")
+    func renamedUsage() {
+        let line =
+            #"{"type":"assistant","timestamp":"2026-11-10T00:00:00Z","message":{"id":"m","model":"x","usage_v2":{}}}"#
+        #expect(parse(line) == .assistantWithoutCall(timestamp: 1_794_268_800))
+    }
+
+    @Test("a user line that only mentions the word assistant is not a call and not an assistant line")
+    func userMentionsAssistant() {
+        #expect(parse(#"{"type":"user","message":{"role":"user","content":"ask the \"assistant\""}}"#) == .notCandidate)
+        #expect(parse(#"{"type":"user","message":{"role":"assistant","content":"hi"}}"#) == .rejected)
     }
 }

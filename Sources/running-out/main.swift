@@ -78,6 +78,18 @@ func run(_ command: CLICommand) async throws {
             toText: style.format(Date(timeIntervalSince1970: to)))
         print(text)
 
+    case .health(let root, let database):
+        let service = openService(root: root, database: database)
+        _ = report(try await service.indexAll())
+        let health = try await service.health()
+        print(
+            "assistant lines (7 days)   \(grouped(health.assistantLines)), not calls \(grouped(health.assistantWithoutCall))"
+        )
+        print(
+            "main lines appended        \(grouped(health.mainLinesAppended)), calls \(grouped(health.mainCallsAppended))"
+        )
+        print("format change              \(health.kind)")
+
     case .watch(let root, let database):
         let service = openService(root: root, database: database)
         // Start watching before the first scan, so changes made during the scan are queued, not lost.

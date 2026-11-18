@@ -100,4 +100,11 @@ struct CLIParserTests {
             try parse("watch --root /r --db /d.sqlite")
                 == .watch(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
     }
+
+    @Test("health takes the same path options as index")
+    func health() throws {
+        #expect(
+            try parse("health --root /r --db /d.sqlite")
+                == .health(root: URL(fileURLWithPath: "/r"), database: URL(fileURLWithPath: "/d.sqlite")))
+    }
 }
