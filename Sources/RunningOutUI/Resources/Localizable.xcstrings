@@ -119,16 +119,6 @@
         }
       }
     },
-    "%@ tokens · %@": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ 토큰 · %2$@"
-          }
-        }
-      }
-    },
     "%@ went to rebuilding caches after a break.": {
       "localizations": {
         "ko": {
@@ -145,6 +135,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "%1$@: 메시지를 보내면 캐시가 유지됩니다. 그렇지 않으면 다음 메시지가 %2$@ 토큰으로 캐시를 다시 만듭니다(약 %3$@)."
+          }
+        }
+      }
+    },
+    "%@: send a message to keep the cache. Otherwise the next message rebuilds it from %@ tokens (an estimated %@).": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: 메시지를 보내면 캐시가 유지됩니다. 그렇지 않으면 다음 메시지가 %2$@ 토큰으로 캐시를 다시 만듭니다(추정 %3$@)."
           }
         }
       }
@@ -179,17 +179,35 @@
         }
       }
     },
-    "1 hour": {
+    "%lld more sessions": {
       "localizations": {
+        "en": {
+          "variations": {
+            "plural": {
+              "one": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more session"
+                }
+              },
+              "other": {
+                "stringUnit": {
+                  "state": "translated",
+                  "value": "%lld more sessions"
+                }
+              }
+            }
+          }
+        },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "1시간"
+            "value": "세션 %lld개 더 있음"
           }
         }
       }
     },
-    "1-hour": {
+    "1 hour": {
       "localizations": {
         "ko": {
           "stringUnit": {
@@ -210,16 +228,6 @@
       }
     },
     "5 minutes": {
-      "localizations": {
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "5분"
-          }
-        }
-      }
-    },
-    "5-minute": {
       "localizations": {
         "ko": {
           "stringUnit": {
@@ -275,6 +283,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "압축 직후"
+          }
+        }
+      }
+    },
+    "After compaction · %@ tokens · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "압축 직후 · %1$@ 토큰 · %2$@"
           }
         }
       }
@@ -369,12 +387,32 @@
         }
       }
     },
+    "Claude Code reports a status this version doesn't know, so this session may already be busy.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code가 이 버전이 모르는 상태를 알려 와, 이 세션이 이미 작업 중일 수도 있습니다."
+          }
+        }
+      }
+    },
     "Claude Code updated": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "Claude Code 업데이트"
+          }
+        }
+      }
+    },
+    "Claude Code updated · %@ tokens · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code 업데이트 · %1$@ 토큰 · %2$@"
           }
         }
       }
@@ -479,6 +517,16 @@
         }
       }
     },
+    "Loading": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "불러오는 중"
+          }
+        }
+      }
+    },
     "Model": {
       "localizations": {
         "ko": {
@@ -505,6 +553,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "모델 변경"
+          }
+        }
+      }
+    },
+    "Model changed · %@ tokens · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "모델 변경 · %1$@ 토큰 · %2$@"
           }
         }
       }
@@ -749,6 +807,16 @@
         }
       }
     },
+    "Session start · %@ tokens · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션 시작 · %1$@ 토큰 · %2$@"
+          }
+        }
+      }
+    },
     "Sessions with a 5-minute cache appear in the list but don't send notifications.": {
       "localizations": {
         "ko": {
@@ -799,6 +867,16 @@
         }
       }
     },
+    "Some calls used a model without a listed price, so these amounts are estimates.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "공식 가격이 없는 모델을 쓴 호출이 있어, 금액은 추정값입니다."
+          }
+        }
+      }
+    },
     "Status unknown": {
       "localizations": {
         "ko": {
@@ -829,22 +907,42 @@
         }
       }
     },
-    "The gap (%@) was longer than the %@ cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.": {
+    "The gap (%@) was longer than the 1-hour cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "간격(%1$@)이 캐시 유지 시간(%2$@)보다 길어 캐시가 만료되었습니다. 3시간을 넘는 간격은 긴 휴식으로 셉니다."
+            "value": "간격(%@)이 캐시 유지 시간(1시간)보다 길어 캐시가 만료되었습니다. 3시간을 넘는 간격은 긴 휴식으로 셉니다."
           }
         }
       }
     },
-    "The gap (%@) was longer than the %@ cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.": {
+    "The gap (%@) was longer than the 1-hour cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "간격(%1$@)이 캐시 유지 시간(%2$@)보다 길어 캐시가 만료되었습니다. 3시간 이하의 간격은 짧은 휴식으로 셉니다."
+            "value": "간격(%@)이 캐시 유지 시간(1시간)보다 길어 캐시가 만료되었습니다. 3시간 이하의 간격은 짧은 휴식으로 셉니다."
+          }
+        }
+      }
+    },
+    "The gap (%@) was longer than the 5-minute cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "간격(%@)이 캐시 유지 시간(5분)보다 길어 캐시가 만료되었습니다. 3시간을 넘는 간격은 긴 휴식으로 셉니다."
+          }
+        }
+      }
+    },
+    "The gap (%@) was longer than the 5-minute cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "간격(%@)이 캐시 유지 시간(5분)보다 길어 캐시가 만료되었습니다. 3시간 이하의 간격은 짧은 휴식으로 셉니다."
           }
         }
       }
@@ -855,6 +953,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "모델이 바뀌었고, 캐시는 모델마다 따로 둡니다."
+          }
+        }
+      }
+    },
+    "This model has no listed price, so the cost is an estimate at Claude Opus 5.5 prices.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 모델은 공식 가격이 없어, 비용은 Claude Opus 5.5 가격으로 계산한 추정값입니다."
           }
         }
       }
@@ -893,6 +1001,44 @@
           "stringUnit": {
             "state": "translated",
             "value": "캐시를 다시 만들지 않고 이어 가려면 %1$lld분 안에 메시지를 보내세요. 그 뒤에는 다음 메시지가 %2$@ 토큰으로 캐시를 다시 만듭니다(약 %3$@)."
+          }
+        }
+      }
+    },
+    "To continue without a rebuild, send a message within %lld minutes. After that, the next message rebuilds the cache from %@ tokens (an estimated %@; this model has no listed price).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To continue without a rebuild, send a message within %#@minutes@. After that, the next message rebuilds the cache from %2$@ tokens (an estimated %3$@; this model has no listed price)."
+          },
+          "substitutions": {
+            "minutes": {
+              "argNum": 1,
+              "formatSpecifier": "lld",
+              "variations": {
+                "plural": {
+                  "one": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg minute"
+                    }
+                  },
+                  "other": {
+                    "stringUnit": {
+                      "state": "translated",
+                      "value": "%arg minutes"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "캐시를 다시 만들지 않고 이어 가려면 %1$lld분 안에 메시지를 보내세요. 그 뒤에는 다음 메시지가 %2$@ 토큰으로 캐시를 다시 만듭니다(추정 %3$@, 이 모델은 공식 가격이 없습니다)."
           }
         }
       }
@@ -955,12 +1101,42 @@
         }
       }
     },
+    "Tokens Are Running Out: no Claude Code history found": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tokens Are Running Out: Claude Code 기록 없음"
+          }
+        }
+      }
+    },
     "Tokens Are Running Out: no usage today": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "Tokens Are Running Out: 오늘 사용 기록 없음"
+          }
+        }
+      }
+    },
+    "Tokens Are Running Out: reading Claude Code history": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tokens Are Running Out: Claude Code 기록을 읽는 중"
+          }
+        }
+      }
+    },
+    "Tokens Are Running Out: unable to read the usage index": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tokens Are Running Out: 사용량 색인을 읽지 못함"
           }
         }
       }
@@ -1005,12 +1181,32 @@
         }
       }
     },
+    "Unknown cause · %@ tokens · %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원인 불명 · %1$@ 토큰 · %2$@"
+          }
+        }
+      }
+    },
     "Untitled session": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "제목 없는 세션"
+          }
+        }
+      }
+    },
+    "Updating": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "갱신하는 중"
           }
         }
       }

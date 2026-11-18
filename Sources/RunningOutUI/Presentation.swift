@@ -75,8 +75,15 @@ public enum Presentation {
         return seconds < 60 ? 0 : Int((seconds / 60).rounded(.up))
     }
 
+    /// Warnings whose cache has not expired yet; a warning disappears the moment its cache expires.
+    public static func activeWarnings(_ warnings: [ExpiryWarning], now: Double) -> [ExpiryWarning] {
+        warnings.filter { $0.expiresAt > now }
+    }
+
     public static func menuBar(warnings: [ExpiryWarning], today: UsageReport?, now: Double) -> MenuBarContent {
-        if let first = warnings.first { return .expiring(minutes: minutesLeft(until: first.expiresAt, now: now)) }
+        if let first = activeWarnings(warnings, now: now).first {
+            return .expiring(minutes: minutesLeft(until: first.expiresAt, now: now))
+        }
         guard let today, today.totalCost != 0 else { return .iconOnly }
         return .share(today.idleRebuildShare)
     }

@@ -38,11 +38,13 @@ struct BreakdownSection: View {
                     }
                 }
             } else {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).accessibilityLabel(Text("Loading", bundle: .module))
             }
         }
         .overlay(alignment: .topTrailing) {
-            if model.isComputing { ProgressView().controlSize(.mini) }
+            if model.isComputing {
+                ProgressView().controlSize(.mini).accessibilityLabel(Text("Updating", bundle: .module))
+            }
         }
     }
 
@@ -52,6 +54,9 @@ struct BreakdownSection: View {
             Text("\(total) at API list prices · \(report.calls) calls", bundle: .module).monospacedDigit()
             let idle = Presentation.shareText(report.idleRebuildShare)
             Text("\(idle) went to rebuilding caches after a break.", bundle: .module).monospacedDigit()
+            if !report.unpricedModels.isEmpty {
+                Text("Some calls used a model without a listed price, so these amounts are estimates.", bundle: .module)
+            }
             if !model.settings.usesDefaultRebuildThreshold {
                 let threshold = Presentation.tokens(model.settings.rebuildThresholdTokens)
                 Text("Counting cache rebuilds of \(threshold) tokens or more (changed in Settings).", bundle: .module)

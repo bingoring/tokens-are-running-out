@@ -12,9 +12,14 @@ enum Copy {
         let title = warning.title ?? String(localized: "Untitled session", bundle: .module)
         let tokens = Presentation.tokens(warning.contextTokens)
         let cost = Presentation.money(warning.rebuildCost)
-        return String(
-            localized:
-                "\(title): send a message to keep the cache. Otherwise the next message rebuilds it from \(tokens) tokens (about \(cost)).",
-            bundle: .module)
+        return warning.priced
+            ? String(
+                localized:
+                    "\(title): send a message to keep the cache. Otherwise the next message rebuilds it from \(tokens) tokens (about \(cost)).",
+                bundle: .module)
+            : String(
+                localized:
+                    "\(title): send a message to keep the cache. Otherwise the next message rebuilds it from \(tokens) tokens (an estimated \(cost)).",
+                bundle: .module)
     }
 }

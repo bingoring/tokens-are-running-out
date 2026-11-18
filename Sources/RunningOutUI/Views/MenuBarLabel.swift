@@ -28,6 +28,16 @@ public struct MenuBarLabel: View {
     }
 
     private func accessibilityLabel(_ content: MenuBarContent) -> Text {
+        switch model.phase {
+        case .starting, .indexing:
+            return Text("Tokens Are Running Out: reading Claude Code history", bundle: .module)
+        case .noTranscripts:
+            return Text("Tokens Are Running Out: no Claude Code history found", bundle: .module)
+        case .indexError:
+            return Text("Tokens Are Running Out: unable to read the usage index", bundle: .module)
+        case .ready:
+            break
+        }
         switch content {
         case .expiring(let minutes):
             return Text(

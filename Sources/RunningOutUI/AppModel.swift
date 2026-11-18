@@ -70,6 +70,13 @@ public final class AppModel {
     private var refreshTask: Task<Void, Never>?
     private var lastRefresh = Date.distantPast
     private var observers: [NSObjectProtocol] = []
+    private var parentWatcher: TranscriptWatcher?
+    /// The transcripts watcher could not start: check for changes once a minute instead (§6).
+    private var polling = false
+    /// Changes reported before the index was ready, applied once it is (W1 starts watching first).
+    private(set) var pendingChanges: [URL] = []
+    private var reconciling = false
+    private var reconcileAgain = false
     /// The selected period's report waits for the popover when only the menu bar needs updating.
     private var selectedIsStale = false
     private var starting = false
@@ -78,7 +85,8 @@ public final class AppModel {
         var period: ReportPeriod
         var threshold: Int
         var generation: Int
-        var day: Int
+        /// Every period ends now, so a report is only reused within the same minute.
+        var minute: Int
     }
 
     public init(
@@ -98,7 +106,11 @@ public final class AppModel {
 
     // MARK: - W1 start
 
+    /// Never runs twice at once: the menu bar, the popover and a retry can all ask.
     public func start() async {
+        guard !starting else { return }
+        starting = true
+        defer { starting = false }
         now = clock()
         notificationAuthorization = await scheduler.authorization()
         loginItemStatus = loginItem.status
@@ -107,23 +119,31 @@ public final class AppModel {
             isDirectory.boolValue
         else {
             phase = .noTranscripts
+            watchForTranscriptsFolder()
             return
         }
+        parentWatcher?.stop()
+        parentWatcher = nil
         do {
-            service = try IndexService(root: environment.root, databaseURL: environment.database)
+            // Opening may rebuild the index after a schema change: keep it off the main thread.
+            let (root, database) = (environment.root, environment.database)
+            service = try await Task.detached { try IndexService(root: root, databaseURL: database) }.value
         } catch {
             phase = .indexError(String(describing: error))
             return
         }
         startWatching()
+        // W1.5: with an existing index, show its results while the scan catches up.
+        if (try? await service?.hasIndexedFiles()) == true {
+            phase = .ready
+            await refreshAll()
+        }
         await indexAll()
     }
 
     /// Starts once; the menu bar label calls it when it first appears.
     public func startIfNeeded() async {
-        guard phase == .starting, service == nil, !starting else { return }
-        starting = true
-        defer { starting = false }
+        guard phase == .starting, service == nil else { return }
         await start()
     }
 
@@ -140,11 +160,20 @@ public final class AppModel {
             _ = try await service.indexAll { progress in
                 guard progress.isInitial else { return }
                 Task { @MainActor [weak self] in
-                    guard let self, self.phase != .ready else { return }
-                    self.phase = .indexing(progress)
+                    guard let self else { return }
+                    switch self.phase {
+                    case .starting, .indexing: self.phase = .indexing(progress)
+                    default: break
+                    }
                 }
             }
+            if !pendingChanges.isEmpty {
+                let paths = pendingChanges
+                pendingChanges = []
+                _ = try await service.update(paths: paths)
+            }
             phase = .ready
+            generation += 1
             await refreshAll()
         } catch {
             phase = .indexError(String(describing: error))
@@ -154,7 +183,11 @@ public final class AppModel {
     // MARK: - W2, W3 changes
 
     public func transcriptsChanged(_ urls: [URL]) async {
-        guard let service, phase == .ready else { return }
+        guard let service, phase == .ready else {
+            // Keep what changed during the first scan; a long backlog becomes one rescan of the root.
+            pendingChanges = pendingChanges.count > 500 ? [environment.root] : pendingChanges + urls
+            return
+        }
         do {
             let summary = try await service.update(paths: urls)
             guard summary.filesRead > 0 || summary.filesRemoved > 0 else { return }
@@ -171,6 +204,7 @@ public final class AppModel {
 
     /// W4: once a minute while something is counting down or the popover is open.
     public func minuteTick() async {
+        if polling { await transcriptsChanged([environment.root]) }
         let previous = now
         now = clock()
         if Calendar.current.startOfDay(for: previous) != Calendar.current.startOfDay(for: now) {
@@ -193,7 +227,10 @@ public final class AppModel {
             cache = [:]
             await refreshReports()
         } else if new.selectedPeriod != old.selectedPeriod {
-            selectedReport = await report(new.selectedPeriod)
+            let period = new.selectedPeriod
+            let found = await report(period)
+            // A slower answer for a period the user already left must not replace the current one.
+            if settings.selectedPeriod == period { selectedReport = found }
         }
         if new.notifyBeforeExpiry, !old.notifyBeforeExpiry, notificationAuthorization == .notDetermined {
             notificationAuthorization = await scheduler.requestAuthorization()
@@ -206,14 +243,20 @@ public final class AppModel {
     }
 
     public func setOpenAtLogin(_ enabled: Bool) {
-        try? loginItem.setEnabled(enabled)
+        do {
+            try loginItem.setEnabled(enabled)
+        } catch {
+            log.error("changing the login item failed: \(error.localizedDescription, privacy: .public)")
+        }
         loginItemStatus = loginItem.status
     }
 
     /// The settings window shows the live permission, which the user may change in System Settings.
     public func refreshSystemStatus() async {
+        let before = notificationAuthorization
         notificationAuthorization = await scheduler.authorization()
         loginItemStatus = loginItem.status
+        if notificationAuthorization != before { await reconcileNotifications() }
     }
 
     public func openReleasesPage() { urlOpener.open(Self.releasesURL) }
@@ -243,11 +286,13 @@ public final class AppModel {
         isComputing = true
         defer { isComputing = false }
         todayReport = await report(.today)
-        if settings.selectedPeriod == .today {
+        let period = settings.selectedPeriod
+        if period == .today {
             selectedReport = todayReport
             selectedIsStale = false
         } else if popoverVisible {
-            selectedReport = await report(settings.selectedPeriod)
+            let found = await report(period)
+            if settings.selectedPeriod == period { selectedReport = found }
             selectedIsStale = false
         } else {
             selectedIsStale = true
@@ -256,9 +301,9 @@ public final class AppModel {
 
     private func report(_ period: ReportPeriod) async -> UsageReport? {
         guard let service else { return nil }
-        let day = Int(Calendar.current.startOfDay(for: now).timeIntervalSince1970)
         let key = CacheKey(
-            period: period, threshold: settings.rebuildThresholdTokens, generation: generation, day: day)
+            period: period, threshold: settings.rebuildThresholdTokens, generation: generation,
+            minute: Int(now.timeIntervalSince1970 / 60))
         if let cached = cache[key] { return cached }
         do {
             let found = try await service.report(
@@ -286,8 +331,9 @@ public final class AppModel {
         updateTicking()
     }
 
-    /// Coalesces bursts of transcript changes: refresh 2 s after the last one, at most every 10 s while the
-    /// popover is open and every 30 s while only the menu bar shows (a busy session writes every second).
+    /// Throttles bursts of transcript changes: the first change after a quiet spell refreshes after 2 s; while
+    /// changes keep coming, at most every 10 s with the popover open and every 30 s with only the menu bar
+    /// showing (a busy session writes every second). Recorded as a deviation from NFR "within 2 s".
     private func scheduleRefresh() {
         guard environment.automaticUpdates else { return }
         guard refreshTask == nil else { return }
@@ -311,14 +357,30 @@ public final class AppModel {
             let fireAt = warning.expiresAt - lead
             guard fireAt > now.timeIntervalSince1970 else { return nil }
             return ExpiryNotificationRequest(
-                identifier: "\(Self.notificationPrefix)\(warning.sessionID).\(Int(warning.expiresAt))",
+                // The lead time is part of the identifier, so changing it replaces what is scheduled.
+                identifier:
+                    "\(Self.notificationPrefix)\(warning.sessionID).\(Int(warning.expiresAt)).\(settings.notifyLeadMinutes)",
                 fireAt: Date(timeIntervalSince1970: fireAt),
                 title: Copy.notificationTitle(minutes: settings.notifyLeadMinutes),
                 body: Copy.notificationBody(warning))
         }
     }
 
+    /// One at a time: a second request while one runs makes it run once more (INV2).
     private func reconcileNotifications() async {
+        if reconciling {
+            reconcileAgain = true
+            return
+        }
+        reconciling = true
+        defer { reconciling = false }
+        repeat {
+            reconcileAgain = false
+            await reconcileOnce()
+        } while reconcileAgain
+    }
+
+    private func reconcileOnce() async {
         let desired = desiredNotifications()
         let pending = await scheduler.pendingIdentifiers().filter { $0.hasPrefix(Self.notificationPrefix) }
         let wanted = Set(desired.map(\.identifier))
@@ -339,7 +401,8 @@ public final class AppModel {
         let sessions = TranscriptWatcher(root: environment.sessions) { [weak self] _ in
             Task { @MainActor in await self?.sessionsChanged() }
         }
-        for watcher in [transcripts, sessions] where (try? watcher.start()) != nil { watchers.append(watcher) }
+        if (try? transcripts.start()) != nil { watchers.append(transcripts) } else { polling = true }
+        if (try? sessions.start()) != nil { watchers.append(sessions) }
         let center = NSWorkspace.shared.notificationCenter
         observers.append(
             center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -349,6 +412,28 @@ public final class AppModel {
             NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) {
                 [weak self] _ in Task { @MainActor in await self?.refreshAll() }
             })
+        // Notification permission may have changed in System Settings while the app was in the background.
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+            ) { [weak self] _ in Task { @MainActor in await self?.refreshSystemStatus() } })
+        updateTicking()
+    }
+
+    /// W1.3: while there is no transcripts folder, watch its parent for it to appear.
+    private func watchForTranscriptsFolder() {
+        guard environment.automaticUpdates, parentWatcher == nil else { return }
+        let parent = environment.root.deletingLastPathComponent()
+        guard FileManager.default.fileExists(atPath: parent.path) else { return }
+        let watcher = TranscriptWatcher(root: parent) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.phase == .noTranscripts,
+                    FileManager.default.fileExists(atPath: self.environment.root.path)
+                else { return }
+                await self.retry()
+            }
+        }
+        if (try? watcher.start()) != nil { parentWatcher = watcher }
     }
 
     private func stopWatching() {
@@ -365,13 +450,15 @@ public final class AppModel {
         if popoverVisible {
             Task {
                 if phase == .noTranscripts {
-                    await start()
+                    await retry()
                     return
                 }
-                if selectedIsStale {
-                    selectedReport = await report(settings.selectedPeriod)
-                    selectedIsStale = false
-                }
+                now = clock()
+                // Every period ends now: recompute (a cache hit only within the same minute).
+                let period = settings.selectedPeriod
+                let found = await report(period)
+                if settings.selectedPeriod == period { selectedReport = found }
+                selectedIsStale = false
                 await minuteTick()
             }
         }
@@ -380,7 +467,7 @@ public final class AppModel {
 
     /// No timer at all unless a cache is counting down or the popover is open (NFR: idle CPU).
     private func updateTicking() {
-        let wanted = environment.automaticUpdates && (!warnings.isEmpty || popoverVisible)
+        let wanted = environment.automaticUpdates && (!warnings.isEmpty || popoverVisible || polling)
         if !wanted {
             tickTask?.cancel()
             tickTask = nil

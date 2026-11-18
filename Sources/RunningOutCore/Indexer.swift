@@ -118,8 +118,8 @@ public final class Indexer {
     public init(root: URL, databaseURL: URL, clock: @escaping () -> Double = { Date().timeIntervalSince1970 }) throws {
         self.root = TranscriptLocator.canonical(root)
         self.clock = clock
-        try FileManager.default.createDirectory(
-            at: databaseURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let databaseFolder = databaseURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: databaseFolder, withIntermediateDirectories: true)
         do {
             db = try Indexer.open(databaseURL)
         } catch let error as SQLiteError where error.isCorruption {
@@ -387,6 +387,11 @@ public final class Indexer {
             events.append(TimelineEvent(seq: s.int(0), kind: .compaction(timestamp: s.optionalDouble(1))))
         }
         return events.sorted { $0.seq < $1.seq }
+    }
+
+    /// True when at least one transcript has been indexed: there are earlier results to show.
+    public func hasIndexedFiles() throws -> Bool {
+        try db.queryRow("SELECT COUNT(*) FROM files") { $0.int(0) } ?? 0 > 0
     }
 
     /// Format-change check (2-3 BR-H1): assistant lines over the last seven days, appended lines per day over

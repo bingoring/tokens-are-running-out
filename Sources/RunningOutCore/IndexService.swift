@@ -35,6 +35,8 @@ public actor IndexService {
         try indexer.indexAll(progress: progress)
     }
 
+    public func hasIndexedFiles() throws -> Bool { try indexer.hasIndexedFiles() }
+
     public func health(now: Double = Date().timeIntervalSince1970) throws -> IndexHealth {
         try indexer.health(now: now)
     }

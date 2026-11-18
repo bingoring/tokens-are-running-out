@@ -91,4 +91,16 @@ struct PresentationTests {
         #expect(Presentation.tokens(720_000, locale: ko) == "72만")
         #expect(Presentation.tokens(1_100_000, locale: en) == "1.1M")
     }
+
+    @Test("an expired warning is dropped at once, not at the next minute")
+    func expiredWarningsHidden() {
+        func warning(_ id: String, _ expiresAt: Double) -> ExpiryWarning {
+            ExpiryWarning(
+                sessionID: id, title: nil, expiresAt: expiresAt, ttl: .oneHour, contextTokens: 1, rebuildCost: 1,
+                model: "m", priced: true, status: .idle)
+        }
+        let warnings = [warning("gone", 990), warning("edge", 1_000), warning("live", 1_300)]
+        #expect(Presentation.activeWarnings(warnings, now: 1_000).map(\.sessionID) == ["live"])
+        #expect(Presentation.menuBar(warnings: warnings, today: nil, now: 1_000) == .expiring(minutes: 5))
+    }
 }

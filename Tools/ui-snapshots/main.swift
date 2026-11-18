@@ -105,7 +105,21 @@ func main() throws {
     var unhealthy = IndexHealth()
     unhealthy.kind = .unreadableLines(share: 0.32)
 
+    // Seven warnings (five shown), the first priced as the fallback; a report with an unpriced model.
+    var many: [ExpiryWarning] = (0..<7).map { n in
+        ExpiryWarning(
+            sessionID: "m\(n)", title: "Session \(n + 1)", expiresAt: t + Double(10 + n * 6) * 60, ttl: .oneHour,
+            contextTokens: 300_000, rebuildCost: 2_400_000_000, model: "claude-opus-5-5", priced: true, status: .idle)
+    }
+    many[0].priced = false
+    many[0].model = "claude-future-9"
+    var estimated = report
+    estimated.unpricedModels = ["claude-future-9": 3]
+    var unpricedEvent = report.rebuilds[0]
+    unpricedEvent.priced = false
+
     let states: [(String, AppModel)] = [
+        ("popover-many-warnings", .preview(phase: .ready, now: now, report: estimated, warnings: many)),
         ("popover-ready", .preview(phase: .ready, now: now, report: report, warnings: warnings, settings: notifying)),
         ("popover-all-causes", .preview(phase: .ready, now: now, report: report, settings: changed)),
         (
@@ -124,6 +138,7 @@ func main() throws {
     }
     try render(RebuildDetailView(event: report.rebuilds[0]), name: "reason-short-break", width: 320, to: folder)
     try render(RebuildDetailView(event: report.rebuilds[1]), name: "reason-long-break", width: 320, to: folder)
+    try render(RebuildDetailView(event: unpricedEvent), name: "reason-unpriced", width: 320, to: folder)
     let denied = AppModel.preview(
         phase: .ready, now: now, settings: notifying,
         services: PreviewServices(notificationStatus: .denied, loginItem: .requiresApproval))

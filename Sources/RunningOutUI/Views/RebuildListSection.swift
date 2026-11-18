@@ -112,8 +112,16 @@ enum RebuildText {
             let away = gap(event.gapSeconds ?? 0)
             let context = Presentation.tokens(event.previousContextTokens ?? event.cacheWriteTokens)
             return String(localized: "\(away) away · context \(context) · \(cost)", bundle: .module)
-        default:
-            return "\(causeName(event.cause)) · " + String(localized: "\(tokens) tokens · \(cost)", bundle: .module)
+        case .afterCompaction:
+            return String(localized: "After compaction · \(tokens) tokens · \(cost)", bundle: .module)
+        case .modelChanged:
+            return String(localized: "Model changed · \(tokens) tokens · \(cost)", bundle: .module)
+        case .versionChanged:
+            return String(localized: "Claude Code updated · \(tokens) tokens · \(cost)", bundle: .module)
+        case .sessionStart:
+            return String(localized: "Session start · \(tokens) tokens · \(cost)", bundle: .module)
+        case .unknown:
+            return String(localized: "Unknown cause · \(tokens) tokens · \(cost)", bundle: .module)
         }
     }
 

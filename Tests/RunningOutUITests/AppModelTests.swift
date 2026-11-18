@@ -117,7 +117,7 @@ struct AppModelTests {
 
         await model.update { $0.notifyBeforeExpiry = true }
         let expiresAt = Self.now.timeIntervalSince1970 + 50 * 60
-        #expect(scheduler.added.map(\.identifier) == ["expiry.s1.\(Int(expiresAt))"])
+        #expect(scheduler.added.map(\.identifier) == ["expiry.s1.\(Int(expiresAt)).10"])
         #expect(scheduler.added.first?.fireAt == Date(timeIntervalSince1970: expiresAt - 600))
     }
 
@@ -214,4 +214,53 @@ struct AppModelTests {
         for _ in 0..<200 where model.selectedReport == nil { await Task.yield() }
         #expect(model.selectedReport?.calls == 1)
     }
+
+    @Test("changing the lead time replaces the scheduled notification")
+    func leadTimeChange() async throws {
+        try write(call("m1", minutesAgo: 10, write: 120_000), to: "projects/-p/s1.jsonl")
+        try running("s1")
+        defaults.set(true, forKey: "tokensAreRunningOut.notifyBeforeExpiry")
+        let model = makeModel()
+        await model.start()
+        let first = try #require(scheduler.added.first)
+        await model.update { $0.notifyLeadMinutes = 15 }
+        #expect(scheduler.removed == [first.identifier])
+        #expect(scheduler.pending.count == 1)
+        #expect(scheduler.pending.values.first?.fireAt == first.fireAt.addingTimeInterval(-5 * 60))
+    }
+
+    @Test("a moving window is recomputed when time has passed, even without new calls")
+    func movingWindow() async throws {
+        try write(call("m1", minutesAgo: 4 * 60, write: 100), to: "projects/-p/s1.jsonl")
+        defaults.set("last5Hours", forKey: "tokensAreRunningOut.selectedPeriod")
+        let clock = Clock(AppModelTests.now)
+        let model = makeModel(clock: { clock.now })
+        await model.start()
+        model.popoverVisible = true
+        for _ in 0..<200 where model.selectedReport == nil { await Task.yield() }
+        #expect(model.selectedReport?.calls == 1)
+        model.popoverVisible = false
+        clock.now = clock.now.addingTimeInterval(2 * 3600)
+        model.popoverVisible = true
+        for _ in 0..<200 where model.selectedReport?.calls != 0 { await Task.yield() }
+        #expect(model.selectedReport?.calls == 0)
+    }
+
+    @Test("changes that arrive before the index is ready are kept and applied afterwards")
+    func changesBeforeReady() async throws {
+        let file = dir.appendingPathComponent("projects/-p/s1.jsonl")
+        try write(call("m1", minutesAgo: 10), to: "projects/-p/s1.jsonl")
+        let model = makeModel()
+        await model.transcriptsChanged([file])
+        #expect(model.pendingChanges == [file])
+        await model.start()
+        #expect(model.pendingChanges.isEmpty)
+        #expect(model.phase == .ready)
+    }
+}
+
+/// A clock the test moves by hand.
+@MainActor final class Clock {
+    var now: Date
+    init(_ now: Date) { self.now = now }
 }

@@ -1,7 +1,10 @@
 import AppKit
 import Foundation
+import OSLog
 import ServiceManagement
 import UserNotifications
+
+let log = Logger(subsystem: "io.github.bingoring.TokensAreRunningOut", category: "app")
 
 public enum NotificationAuthorization: Sendable, Equatable {
     case notDetermined
@@ -45,17 +48,31 @@ public enum LoginItemStatus: Sendable, Equatable {
 }
 
 /// `UNUserNotificationCenter`. Only usable inside an app bundle.
-public final class UserNotificationScheduler: NotificationScheduling {
+public final class UserNotificationScheduler: NSObject, NotificationScheduling, UNUserNotificationCenterDelegate {
     private let center = UNUserNotificationCenter.current()
 
-    public init() {}
+    override public init() {
+        super.init()
+        center.delegate = self
+    }
+
+    /// Show the banner even while the popover or Settings keeps the app in front.
+    nonisolated public func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
 
     public func authorization() async -> NotificationAuthorization {
         Self.map(await center.notificationSettings().authorizationStatus)
     }
 
     public func requestAuthorization() async -> NotificationAuthorization {
-        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        do {
+            _ = try await center.requestAuthorization(options: [.alert, .sound])
+        } catch {
+            log.error("notification permission request failed: \(error.localizedDescription, privacy: .public)")
+        }
         return await authorization()
     }
 
@@ -74,7 +91,12 @@ public final class UserNotificationScheduler: NotificationScheduling {
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(
             timeInterval: max(1, request.fireAt.timeIntervalSinceNow), repeats: false)
-        try? await center.add(UNNotificationRequest(identifier: request.identifier, content: content, trigger: trigger))
+        do {
+            try await center.add(
+                UNNotificationRequest(identifier: request.identifier, content: content, trigger: trigger))
+        } catch {
+            log.error("scheduling a notification failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private static func map(_ status: UNAuthorizationStatus) -> NotificationAuthorization {

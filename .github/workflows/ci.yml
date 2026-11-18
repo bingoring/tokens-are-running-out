@@ -65,8 +65,8 @@ jobs:
 
       - name: Transcripts are only read (rule R9)
         run: |
-          if grep -rnE 'forWritingTo|forUpdating|\.write\(to|createFile\(|removeItem\(' Sources \
-              | grep -v 'Indexer.swift:.*databaseURL.path'; then
+          if grep -rnE 'forWritingTo|forWritingAtPath|forUpdating|\.write\(to|createFile\(|removeItem\(|createDirectory\(|moveItem\(|copyItem\(|replaceItem|fopen\(|O_WRONLY|O_RDWR|O_CREAT' Sources \
+              | grep -v 'Indexer.swift:.*database\(URL\|Folder\)'; then
             echo "Sources/ may only write the index database." >&2
             exit 1
           fi

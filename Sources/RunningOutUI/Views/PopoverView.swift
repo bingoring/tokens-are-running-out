@@ -40,6 +40,7 @@ public struct PopoverView: View {
         switch model.phase {
         case .starting:
             ProgressView().controlSize(.small).frame(maxWidth: .infinity)
+                .accessibilityLabel(Text("Loading", bundle: .module))
         case .indexing(let progress):
             IndexingBanner(progress: progress)
         case .noTranscripts:
@@ -64,9 +65,10 @@ public struct PopoverView: View {
             if model.health.kind != .none {
                 FormatChangeBanner(kind: model.health.kind) { model.openReleasesPage() }
             }
-            if !model.warnings.isEmpty {
+            let active = Presentation.activeWarnings(model.warnings, now: model.now.timeIntervalSince1970)
+            if !active.isEmpty {
                 ExpiringSessionsSection(
-                    warnings: model.warnings, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry)
+                    warnings: active, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry)
             }
             BreakdownSection(model: model)
             RebuildListSection(model: model)
@@ -126,9 +128,13 @@ struct ExpiringSessionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Caches expiring soon", bundle: .module).font(.body.weight(.semibold))
-            ForEach(Array(warnings.enumerated()), id: \.element.sessionID) { index, warning in
+            // At most five rows, so the popover never grows past the screen.
+            ForEach(Array(warnings.prefix(5).enumerated()), id: \.element.sessionID) { index, warning in
                 ExpiryWarningRow(
                     warning: warning, now: now, showsAdvice: index == 0, notificationsOn: notificationsOn)
+            }
+            if warnings.count > 5 {
+                Text("\(warnings.count - 5) more sessions", bundle: .module).font(.callout)
             }
         }
     }
@@ -173,11 +179,18 @@ struct ExpiryWarningRow: View {
             }
             if showsAdvice {
                 let tokens = Presentation.tokens(warning.contextTokens)
-                let cost = (warning.priced ? "" : "~") + Presentation.money(warning.rebuildCost)
-                Text(
-                    "To continue without a rebuild, send a message within \(max(minutes, 1)) minutes. After that, the next message rebuilds the cache from \(tokens) tokens (about \(cost)).",
-                    bundle: .module
-                )
+                let cost = Presentation.money(warning.rebuildCost)
+                Group {
+                    if warning.priced {
+                        Text(
+                            "To continue without a rebuild, send a message within \(max(minutes, 1)) minutes. After that, the next message rebuilds the cache from \(tokens) tokens (about \(cost)).",
+                            bundle: .module)
+                    } else {
+                        Text(
+                            "To continue without a rebuild, send a message within \(max(minutes, 1)) minutes. After that, the next message rebuilds the cache from \(tokens) tokens (an estimated \(cost); this model has no listed price).",
+                            bundle: .module)
+                    }
+                }
                 .font(.callout)
 
                 .fixedSize(horizontal: false, vertical: true)

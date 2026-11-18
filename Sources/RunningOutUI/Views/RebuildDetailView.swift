@@ -50,6 +50,13 @@ public struct RebuildDetailView: View {
                 let tokens = Presentation.tokens(event.cacheWriteTokens)
                 let cost = Presentation.money(event.cacheWriteCost)
                 Text("Rebuilt \(tokens) tokens · \(cost) at API list prices", bundle: .module)
+                if !event.priced {
+                    Text(
+                        "This model has no listed price, so the cost is an estimate at Claude Opus 5.5 prices.",
+                        bundle: .module
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                }
                 if event.cause == .expiredShortBreak {
                     let instead = Presentation.money(event.cacheWriteCost - event.reducibleCost)
                     Label {
@@ -75,18 +82,25 @@ public struct RebuildDetailView: View {
     }
 
     @ViewBuilder private var rule: some View {
-        let lifetime =
-            event.previousTTL == .oneHour ? Text("1-hour", bundle: .module) : Text("5-minute", bundle: .module)
         let gap = RebuildText.gap(event.gapSeconds ?? 0)
+        let hour = event.previousTTL == .oneHour
         switch event.cause {
         case .expiredShortBreak:
-            Text(
-                "The gap (\(gap)) was longer than the \(lifetime) cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.",
-                bundle: .module)
+            hour
+                ? Text(
+                    "The gap (\(gap)) was longer than the 1-hour cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.",
+                    bundle: .module)
+                : Text(
+                    "The gap (\(gap)) was longer than the 5-minute cache lifetime, so the cache had expired. Gaps up to 3 hours count as short breaks.",
+                    bundle: .module)
         case .expiredLongBreak:
-            Text(
-                "The gap (\(gap)) was longer than the \(lifetime) cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.",
-                bundle: .module)
+            hour
+                ? Text(
+                    "The gap (\(gap)) was longer than the 1-hour cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.",
+                    bundle: .module)
+                : Text(
+                    "The gap (\(gap)) was longer than the 5-minute cache lifetime, so the cache had expired. Gaps over 3 hours count as long breaks.",
+                    bundle: .module)
         case .afterCompaction:
             Text("The conversation was compacted just before this call, which starts a new cache.", bundle: .module)
         case .modelChanged:
