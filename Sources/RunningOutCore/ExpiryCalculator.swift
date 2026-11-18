@@ -15,7 +15,7 @@ public struct ExpiryWarning: Sendable, Equatable {
     /// False when the model is missing from the price table and was priced as the fallback.
     public var priced: Bool
     public enum Status: Sendable, Equatable {
-        /// The running-session file says the session is idle.
+        /// The running-session file says the session is idle or waiting for the user.
         case idle
         /// The running-session file has a status this version does not know.
         case unknownStatus
@@ -53,13 +53,15 @@ public enum ExpiryCalculator {
         switch registry {
         case .available(let sessions):
             // Two processes can resume one session: warn once, preferring the one known to be idle.
+            // Idle and waiting for the user both mean no call is running.
+            func known(_ status: RunningSession.Status) -> Bool { status == .idle || status == .waiting }
             var byID: [String: RunningSession] = [:]
             for session in sessions where session.status != .busy {
-                if let kept = byID[session.sessionID], kept.status == .idle { continue }
+                if let kept = byID[session.sessionID], known(kept.status) { continue }
                 byID[session.sessionID] = session
             }
             for session in byID.values {
-                candidates.append((session, session.status == .idle ? .idle : .unknownStatus, session.sessionID))
+                candidates.append((session, known(session.status) ? .idle : .unknownStatus, session.sessionID))
             }
         case .unavailable:
             // Any main session whose last call may still be cached (TTLs are at most one hour).

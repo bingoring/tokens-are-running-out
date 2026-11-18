@@ -6,6 +6,8 @@ public struct RunningSession: Sendable, Equatable {
     public enum Status: Sendable, Equatable {
         case busy
         case idle
+        /// Waiting for the user (a question or a permission prompt): no calls, so the cache is ageing.
+        case waiting
         /// A status this version does not know.
         case other
     }
@@ -92,6 +94,7 @@ public struct SessionRegistry {
             switch statusText {
             case "busy": .busy
             case "idle": .idle
+            case "waiting": .waiting
             default: .other
             }
         let name = (object["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }

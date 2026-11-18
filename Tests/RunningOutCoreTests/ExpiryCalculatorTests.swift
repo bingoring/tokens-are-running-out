@@ -102,4 +102,10 @@ struct ExpiryCalculatorTests {
         let found = try warnings(.available([other, running("s1")]), [last("s1", ago: 60)])
         #expect(found.map(\.status) == [.idle])
     }
+
+    @Test("a session waiting for the user makes no calls, so it is warned like an idle one")
+    func waitingSession() throws {
+        let found = try warnings(.available([running("s1", .waiting)]), [last("s1", ago: 60)])
+        #expect(found.map(\.status) == [.idle])
+    }
 }

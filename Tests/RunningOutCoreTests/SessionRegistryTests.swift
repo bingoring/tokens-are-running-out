@@ -46,12 +46,13 @@ struct SessionRegistryTests {
         try dir.write(session(pid: 101, id: "s1", status: "idle"), to: "sessions/101.json")
         try dir.write(session(pid: 102, id: "s2", status: "busy", name: nil), to: "sessions/102.json")
         try dir.write(session(pid: 103, id: "s3", status: "waiting"), to: "sessions/103.json")
+        try dir.write(session(pid: 104, id: "s4", status: "thinking"), to: "sessions/104.json")
         let registry = SessionRegistry(directory: dir.url.appendingPathComponent("sessions"), isAlive: { _, _ in true })
         guard case .available(let sessions) = registry.load() else {
             Issue.record("expected available")
             return
         }
-        #expect(sessions.map(\.status) == [.idle, .busy, .other])
+        #expect(sessions.map(\.status) == [.idle, .busy, .waiting, .other])
         #expect(sessions[0].name == "Refactor parser")
         #expect(sessions[1].name == nil)
         #expect(sessions[0].statusSince == 1_794_268_800)
