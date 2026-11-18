@@ -1,0 +1,47 @@
+name: Update Homebrew tap
+
+# Points the cask at an existing stable release, without rebuilding. Use it when the tap step of the
+# Release workflow failed, for example because TAP_TOKEN expired.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Released tag, for example v1.2.3
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  update-tap:
+    if: github.repository == 'bingoring/tokens-are-running-out'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read the version and checksum from the release
+        id: release
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag must look like v1.2.3; pre-releases do not change the cask"
+            exit 1
+          fi
+          version="${TAG#v}"
+          asset="TokensAreRunningOut-$version.zip"
+          gh release download "$TAG" --pattern "$asset" --pattern "$asset.sha256" --dir "$RUNNER_TEMP/release"
+          (cd "$RUNNER_TEMP/release" && shasum -a 256 -c "$asset.sha256")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d ' ' -f 1 "$RUNNER_TEMP/release/$asset.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Point the cask at it
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          SHA256: ${{ steps.release.outputs.sha256 }}
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: scripts/update-tap.sh "$VERSION" "$SHA256"
