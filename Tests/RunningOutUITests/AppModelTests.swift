@@ -201,4 +201,17 @@ struct AppModelTests {
         #expect(settings.rebuildThresholdTokens == 50_000)
         #expect(settings.notifyLeadMinutes == 10)
     }
+
+    @Test("another period's report waits until the popover opens")
+    func selectedReportWaitsForPopover() async throws {
+        try write(call("m1", minutesAgo: 120, write: 60_000), to: "projects/-p/s1.jsonl")
+        defaults.set("last7Days", forKey: "tokensAreRunningOut.selectedPeriod")
+        let model = makeModel()
+        await model.start()
+        #expect(model.todayReport != nil)
+        #expect(model.selectedReport == nil)
+        model.popoverVisible = true
+        for _ in 0..<200 where model.selectedReport == nil { await Task.yield() }
+        #expect(model.selectedReport?.calls == 1)
+    }
 }

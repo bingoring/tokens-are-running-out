@@ -70,6 +70,8 @@ public final class AppModel {
     private var refreshTask: Task<Void, Never>?
     private var lastRefresh = Date.distantPast
     private var observers: [NSObjectProtocol] = []
+    /// The selected period's report waits for the popover when only the menu bar needs updating.
+    private var selectedIsStale = false
     private var starting = false
 
     private struct CacheKey: Hashable {
@@ -241,7 +243,15 @@ public final class AppModel {
         isComputing = true
         defer { isComputing = false }
         todayReport = await report(.today)
-        selectedReport = settings.selectedPeriod == .today ? todayReport : await report(settings.selectedPeriod)
+        if settings.selectedPeriod == .today {
+            selectedReport = todayReport
+            selectedIsStale = false
+        } else if popoverVisible {
+            selectedReport = await report(settings.selectedPeriod)
+            selectedIsStale = false
+        } else {
+            selectedIsStale = true
+        }
     }
 
     private func report(_ period: ReportPeriod) async -> UsageReport? {
@@ -276,11 +286,13 @@ public final class AppModel {
         updateTicking()
     }
 
-    /// Coalesces bursts of transcript changes: refresh 2 s after the last one, at most every 10 s.
+    /// Coalesces bursts of transcript changes: refresh 2 s after the last one, at most every 10 s while the
+    /// popover is open and every 30 s while only the menu bar shows (a busy session writes every second).
     private func scheduleRefresh() {
         guard environment.automaticUpdates else { return }
         guard refreshTask == nil else { return }
-        let wait = max(2, 10 - clock().timeIntervalSince(lastRefresh))
+        let interval: Double = popoverVisible ? 10 : 30
+        let wait = max(2, interval - clock().timeIntervalSince(lastRefresh))
         refreshTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(wait))
             guard let self, !Task.isCancelled else { return }
@@ -352,7 +364,15 @@ public final class AppModel {
     private func popoverVisibilityChanged() {
         if popoverVisible {
             Task {
-                if phase == .noTranscripts { await start() } else { await minuteTick() }
+                if phase == .noTranscripts {
+                    await start()
+                    return
+                }
+                if selectedIsStale {
+                    selectedReport = await report(settings.selectedPeriod)
+                    selectedIsStale = false
+                }
+                await minuteTick()
             }
         }
         updateTicking()
