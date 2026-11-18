@@ -49,7 +49,8 @@ struct PresentationTests {
         var report = UsageReport(from: 0, to: 1)
         func event(_ id: String, _ cause: RebuildCause, cost: Int, at: Double) -> RebuildEvent {
             RebuildEvent(
-                messageID: id, timestamp: at, file: URL(fileURLWithPath: "/p"), sessionID: "s", title: nil, cause: cause,
+                messageID: id, timestamp: at, file: URL(fileURLWithPath: "/p"), sessionID: "s", title: nil,
+                cause: cause,
                 previousTimestamp: nil, gapSeconds: nil, previousTTL: .oneHour, previousModel: nil, model: "m",
                 previousVersion: nil, version: nil, cacheWriteTokens: 1, cacheWriteCost: cost, reducibleCost: 0)
         }

@@ -42,14 +42,14 @@ public final class AppModel {
     public static let sourceURL = URL(string: "https://github.com/bingoring/tokens-are-running-out")!
     static let notificationPrefix = "expiry."
 
-    public private(set) var phase = Phase.starting
+    public internal(set) var phase = Phase.starting
     public private(set) var settings: AppSettings
-    public private(set) var todayReport: UsageReport?
-    public private(set) var selectedReport: UsageReport?
+    public internal(set) var todayReport: UsageReport?
+    public internal(set) var selectedReport: UsageReport?
     public private(set) var isComputing = false
-    public private(set) var warnings: [ExpiryWarning] = []
-    public private(set) var health = IndexHealth()
-    public private(set) var notificationAuthorization = NotificationAuthorization.notDetermined
+    public internal(set) var warnings: [ExpiryWarning] = []
+    public internal(set) var health = IndexHealth()
+    public internal(set) var notificationAuthorization = NotificationAuthorization.notDetermined
     public private(set) var loginItemStatus: LoginItemStatus
     public private(set) var now: Date
     public var popoverVisible = false {
@@ -70,6 +70,7 @@ public final class AppModel {
     private var refreshTask: Task<Void, Never>?
     private var lastRefresh = Date.distantPast
     private var observers: [NSObjectProtocol] = []
+    private var starting = false
 
     private struct CacheKey: Hashable {
         var period: ReportPeriod
@@ -114,6 +115,14 @@ public final class AppModel {
         }
         startWatching()
         await indexAll()
+    }
+
+    /// Starts once; the menu bar label calls it when it first appears.
+    public func startIfNeeded() async {
+        guard phase == .starting, service == nil, !starting else { return }
+        starting = true
+        defer { starting = false }
+        await start()
     }
 
     public func retry() async {
