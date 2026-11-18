@@ -41,6 +41,17 @@ public actor IndexService {
 
     public func lastCall(ofSession sessionID: String) throws -> LastCall? { try indexer.lastCall(ofSession: sessionID) }
 
+    /// Cache-expiry warnings for the running sessions (2-3 BR-E1).
+    public func expiryWarnings(
+        registry: RegistryState, now: Double = Date().timeIntervalSince1970,
+        warningContextTokens: Int = ExpiryCalculator.defaultWarningContextTokens
+    ) throws -> [ExpiryWarning] {
+        try ExpiryCalculator.warnings(
+            registry: registry, now: now, warningContextTokens: warningContextTokens, prices: priceTable(),
+            lastCall: { try indexer.lastCall(ofSession: $0) },
+            sessionsWithCallsSince: { try indexer.mainSessions(withCallsSince: $0) })
+    }
+
     public func mainSessions(withCallsSince since: Double) throws -> [String] {
         try indexer.mainSessions(withCallsSince: since)
     }

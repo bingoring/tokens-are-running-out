@@ -90,6 +90,29 @@ func run(_ command: CLICommand) async throws {
         )
         print("format change              \(health.kind)")
 
+    case .sessions(let root, let database):
+        // Counts and numbers only: session titles stay off the terminal.
+        let service = openService(root: root, database: database)
+        _ = report(try await service.indexAll())
+        let registry = SessionRegistry(
+            directory: SessionRegistry.defaultDirectory(home: FileManager.default.homeDirectoryForCurrentUser))
+        let state = registry.load()
+        switch state {
+        case .unavailable:
+            print("running sessions           unavailable")
+        case .available(let sessions):
+            let idle = sessions.filter { $0.status == .idle }.count
+            let busy = sessions.filter { $0.status == .busy }.count
+            print("running sessions           \(sessions.count) (idle \(idle), busy \(busy))")
+        }
+        let now = Date().timeIntervalSince1970
+        for warning in try await service.expiryWarnings(registry: state, now: now) {
+            print(
+                "warning                    \(Int(((warning.expiresAt - now) / 60).rounded(.up))) min left, "
+                    + "context \(grouped(warning.contextTokens)), \(ReportText.money(warning.rebuildCost)), "
+                    + "ttl \(warning.ttl.rawValue), status \(warning.statusKnown ? "idle" : "unknown")")
+        }
+
     case .watch(let root, let database):
         let service = openService(root: root, database: database)
         // Start watching before the first scan, so changes made during the scan are queued, not lost.
