@@ -57,13 +57,24 @@ echo "signed: hardened runtime, $archs"
 
 if [ "$dry_run" = 0 ]; then
     ditto -c -k --keepParent "$app" "$out/submit.zip"
-    result=$(xcrun notarytool submit "$out/submit.zip" --key "$key" --key-id "$key_id" --issuer "$issuer" \
-        --wait --timeout 30m --output-format json) || true
-    status=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
-    id=$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
-    echo "notarization: ${status:-no answer} ${id}"
+    # notarytool prints its JSON on stdout when the submission is accepted, and on stderr when it is not or
+    # when the wait times out. Read both and take the JSON line.
+    output=$(xcrun notarytool submit "$out/submit.zip" --key "$key" --key-id "$key_id" --issuer "$issuer" \
+        --wait --timeout 30m --output-format json 2>&1) || true
+    json=$(printf '%s\n' "$output" | grep '^{' | tail -n 1)
+    field() { printf '%s' "$json" | python3 -c "import json, sys; print(json.load(sys.stdin).get('$1', ''))" 2>/dev/null || true; }
+    status=$(field status)
+    id=$(field id)
+    echo "notarization: ${status:-no status}${id:+, submission $id}"
     if [ "$status" != "Accepted" ]; then
-        [ -n "$id" ] && xcrun notarytool log "$id" --key "$key" --key-id "$key_id" --issuer "$issuer" || true
+        printf '%s\n' "$output" >&2
+        case "$status" in
+        Invalid | Rejected) xcrun notarytool log "$id" --key "$key" --key-id "$key_id" --issuer "$issuer" || true ;;
+        esac
+        if [ -n "$id" ] && [ -z "$status" ]; then
+            echo "Apple is still processing it. Check later with: xcrun notarytool info $id" \
+                "--key <AuthKey.p8> --key-id <key ID> --issuer <issuer ID>" >&2
+        fi
         fail "notarization was not accepted"
     fi
     rm "$out/submit.zip"
