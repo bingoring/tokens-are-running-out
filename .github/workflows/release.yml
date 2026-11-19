@@ -67,6 +67,15 @@ jobs:
             echo "::error::Missing secrets:$missing"
             exit 1
           fi
+          # Formats only; the values are never printed.
+          if ! printf '%s' "$NOTARY_KEY_ID" | grep -Eq '^[A-Z0-9]{10}$'; then
+            echo "::error::NOTARY_KEY_ID must be the 10-character key ID of an App Store Connect team key"
+            exit 1
+          fi
+          if ! printf '%s' "$NOTARY_ISSUER_ID" | grep -Eqi '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
+            echo "::error::NOTARY_ISSUER_ID must be the issuer ID (a UUID) shown above the team keys in App Store Connect"
+            exit 1
+          fi
 
       - name: Import the Developer ID certificate into a temporary keychain
         id: signing
