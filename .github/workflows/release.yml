@@ -75,6 +75,10 @@ jobs:
             echo "::error::The checkout ($commit) is not the commit $TAG points at ($tagged)"
             exit 1
           fi
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/main^{commit}" > /dev/null; then
+            echo "::error::origin/main was not fetched, so the tag cannot be checked against it"
+            exit 1
+          fi
           if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
             echo "::error::$TAG points at $commit, which is not on main. Stable releases are tagged on main."
             exit 1
