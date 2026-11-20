@@ -151,6 +151,9 @@ func main() throws {
     try render(
         MenuBarLabel(model: .preview(phase: .ready, now: now, report: report)), name: "menubar-share", width: 80,
         to: folder)
+    try render(
+        MenuBarLabel(model: .preview(phase: .indexError("disk full"), now: now, report: report)),
+        name: "menubar-index-error", width: 80, to: folder)
 }
 
 MainActor.assumeIsolated {

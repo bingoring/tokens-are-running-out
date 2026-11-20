@@ -12,13 +12,19 @@ public struct MenuBarLabel: View {
             warnings: model.warnings, today: model.todayReport, now: model.now.timeIntervalSince1970)
         HStack(spacing: 4) {
             Image(systemName: "hourglass")
-            switch content {
-            case .expiring(let minutes):
-                minutes == 0 ? Text("<1 min", bundle: .module) : Text("\(minutes) min", bundle: .module)
-            case .share(let share):
-                Text(verbatim: Presentation.shareText(share))
-            case .iconOnly:
-                EmptyView()
+            if case .indexError = model.phase {
+                // The numbers stopped updating: show that instead of a stale number (R-1). The accessible name
+                // says what happened, and the popover offers Try Again.
+                Image(systemName: "exclamationmark.triangle")
+            } else {
+                switch content {
+                case .expiring(let minutes):
+                    minutes == 0 ? Text("<1 min", bundle: .module) : Text("\(minutes) min", bundle: .module)
+                case .share(let share):
+                    Text(verbatim: Presentation.shareText(share))
+                case .iconOnly:
+                    EmptyView()
+                }
             }
         }
         .monospacedDigit()

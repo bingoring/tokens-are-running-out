@@ -4,6 +4,11 @@ import SQLite3
 public struct SQLiteError: Error, CustomStringConvertible {
     public let code: Int32
     public let message: String
+
+    public init(code: Int32, message: String) {
+        self.code = code
+        self.message = message
+    }
     public var description: String { "SQLite error \(code): \(message)" }
 
     /// The file is not a usable database and should be rebuilt.
