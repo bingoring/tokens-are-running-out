@@ -3,6 +3,19 @@ import Foundation
 import Observation
 import RunningOutCore
 
+/// The index operations the app uses. A protocol so tests can pause or fail them (R-1).
+public protocol IndexServing: AnyObject, Sendable {
+    func indexAll(progress: (@Sendable (IndexProgress) -> Void)?) async throws -> IndexSummary
+    func update(paths: [URL]) async throws -> IndexSummary
+    func hasIndexedFiles() async throws -> Bool
+    func report(period: ReportPeriod, now: Date, rebuildThreshold: Int) async throws -> UsageReport
+    func expiryWarnings(registry: RegistryState, now: Double, warningContextTokens: Int) async throws
+        -> [ExpiryWarning]
+    func health(now: Double) async throws -> IndexHealth
+}
+
+extension IndexService: IndexServing {}
+
 /// The app's state: index, reports, warnings and notifications (2-3 business-logic-model W1 to W6).
 @MainActor @Observable
 public final class AppModel {
@@ -62,7 +75,8 @@ public final class AppModel {
     private let urlOpener: URLOpening
     private let registry: SessionRegistry
     private let clock: () -> Date
-    private var service: IndexService?
+    private let openIndex: @Sendable (_ root: URL, _ database: URL, _ opening: IndexOpening) throws -> any IndexServing
+    private var service: (any IndexServing)?
     private var cache: [CacheKey: UsageReport] = [:]
     private var generation = 0
     private var watchers: [TranscriptWatcher] = []
@@ -77,9 +91,13 @@ public final class AppModel {
     private(set) var pendingChanges: [URL] = []
     private var reconciling = false
     private var reconcileAgain = false
-    /// The selected period's report waits for the popover when only the menu bar needs updating.
-    private var selectedIsStale = false
+    private var refreshingWarnings = false
+    private var refreshWarningsAgain = false
     private var starting = false
+    /// Try Again while a start runs: the start begins again once it finishes (R-1).
+    private var restartRequested = false
+    /// The index turned out damaged while running: the next start rebuilds it rather than reopening it.
+    private var startOverRequested = false
 
     private struct CacheKey: Hashable {
         var period: ReportPeriod
@@ -91,8 +109,12 @@ public final class AppModel {
 
     public init(
         environment: Environment, scheduler: NotificationScheduling, loginItem: LoginItemControlling,
-        urlOpener: URLOpening, registry: SessionRegistry? = nil, clock: @escaping () -> Date = Date.init
+        urlOpener: URLOpening, registry: SessionRegistry? = nil, clock: @escaping () -> Date = Date.init,
+        openIndex:
+            @escaping @Sendable (_ root: URL, _ database: URL, _ opening: IndexOpening) throws
+            -> any IndexServing = { try IndexService(root: $0, databaseURL: $1, opening: $2) }
     ) {
+        self.openIndex = openIndex
         self.environment = environment
         self.scheduler = scheduler
         self.loginItem = loginItem
@@ -106,11 +128,25 @@ public final class AppModel {
 
     // MARK: - W1 start
 
-    /// Never runs twice at once: the menu bar, the popover and a retry can all ask.
+    /// Never runs twice at once: the menu bar, the popover and a retry can all ask. A retry that arrives
+    /// meanwhile makes it start again when it finishes, so no request is lost and no half-torn state is left.
     public func start() async {
         guard !starting else { return }
         starting = true
         defer { starting = false }
+        repeat {
+            restartRequested = false
+            await startOnce()
+        } while restartRequested
+    }
+
+    private func startOnce() async {
+        stopWatching()
+        service = nil
+        polling = false
+        if phase != .starting { phase = .starting }
+        let opening: IndexOpening = startOverRequested ? .startOver : .replaceUnusable
+        startOverRequested = false
         now = clock()
         notificationAuthorization = await scheduler.authorization()
         loginItemStatus = loginItem.status
@@ -126,17 +162,21 @@ public final class AppModel {
         parentWatcher = nil
         do {
             // Opening may rebuild the index after a schema change: keep it off the main thread.
-            let (root, database) = (environment.root, environment.database)
-            service = try await Task.detached { try IndexService(root: root, databaseURL: database) }.value
+            let (root, database, openIndex) = (environment.root, environment.database, openIndex)
+            service = try await Task.detached { try openIndex(root, database, opening) }.value
         } catch {
-            phase = .indexError(String(describing: error))
+            indexFailed(error)
             return
         }
         startWatching()
-        // W1.5: with an existing index, show its results while the scan catches up.
-        if (try? await service?.hasIndexedFiles()) == true {
-            phase = .ready
-            await refreshAll()
+        // W1.5: with a completed index, show its results while the scan catches up.
+        do {
+            if try await service?.hasIndexedFiles() == true {
+                phase = .ready
+                await refreshAll()
+            }
+        } catch {
+            log.error("checking the index failed: \(String(describing: error), privacy: .public)")
         }
         await indexAll()
     }
@@ -148,16 +188,25 @@ public final class AppModel {
     }
 
     public func retry() async {
-        stopWatching()
-        service = nil
-        phase = .starting
+        if starting {
+            restartRequested = true
+            return
+        }
         await start()
+    }
+
+    /// Damage is not retried on its own: it waits for Try Again, which then rebuilds the index (R-1).
+    private func indexFailed(_ error: any Error) {
+        phase = .indexError(String(describing: error))
+        if (error as? SQLiteError)?.isCorruption == true { startOverRequested = true }
+        log.error("the index failed: \(String(describing: error), privacy: .public)")
     }
 
     private func indexAll() async {
         guard let service else { return }
         do {
-            _ = try await service.indexAll { progress in
+            // Weak in the outer closure too: the inner capture alone would still hold the model strongly.
+            let summary = try await service.indexAll { [weak self] progress in
                 guard progress.isInitial else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -167,39 +216,70 @@ public final class AppModel {
                     }
                 }
             }
-            if !pendingChanges.isEmpty {
+            logSkipped(summary)
+            // Changes keep arriving while the backlog is applied; nothing awaits between the last check and
+            // `.ready`, so none is left behind.
+            while !pendingChanges.isEmpty {
                 let paths = pendingChanges
                 pendingChanges = []
-                _ = try await service.update(paths: paths)
+                logSkipped(try await service.update(paths: paths))
             }
             phase = .ready
             generation += 1
             await refreshAll()
         } catch {
-            phase = .indexError(String(describing: error))
+            indexFailed(error)
         }
+    }
+
+    /// R13: files that could not be read are reported, by count only (their paths name the user's projects).
+    private func logSkipped(_ summary: IndexSummary) {
+        guard !summary.skippedFiles.isEmpty else { return }
+        log.error("skipped \(summary.skippedFiles.count, privacy: .public) transcript files")
     }
 
     // MARK: - W2, W3 changes
 
     public func transcriptsChanged(_ urls: [URL]) async {
-        guard let service, phase == .ready else {
+        // After an error (but not damage, which waits for Try Again), the next change tries again: one rescan
+        // of the root also picks up whatever failed before.
+        var recovering = false
+        if case .indexError = phase, service != nil, !startOverRequested { recovering = true }
+        guard let service, phase == .ready || recovering else {
             // Keep what changed during the first scan; a long backlog becomes one rescan of the root.
             pendingChanges = pendingChanges.count > 500 ? [environment.root] : pendingChanges + urls
             return
         }
         do {
-            let summary = try await service.update(paths: urls)
-            guard summary.filesRead > 0 || summary.filesRemoved > 0 else { return }
+            let summary = try await service.update(paths: recovering ? [environment.root] : urls)
+            logSkipped(summary)
+            if recovering {
+                pendingChanges = []
+                phase = .ready
+                generation += 1
+                await refreshAll()
+                return
+            }
+            guard summary.filesRead > 0 || summary.filesRemoved > 0 || summary.filesReset > 0 else { return }
             generation += 1
             scheduleRefresh()
         } catch {
-            phase = .indexError(String(describing: error))
+            indexFailed(error)
         }
     }
 
+    /// Session files change at every status change: one refresh at a time, and one more if more arrived.
     public func sessionsChanged() async {
-        await refreshWarnings()
+        if refreshingWarnings {
+            refreshWarningsAgain = true
+            return
+        }
+        refreshingWarnings = true
+        defer { refreshingWarnings = false }
+        repeat {
+            refreshWarningsAgain = false
+            await refreshWarnings()
+        } while refreshWarningsAgain
     }
 
     /// W4: once a minute while something is counting down or the popover is open.
@@ -277,8 +357,12 @@ public final class AppModel {
         lastRefresh = clock()
         await refreshReports()
         await refreshWarnings()
-        if let service, let health = try? await service.health(now: now.timeIntervalSince1970) {
-            self.health = health
+        if let service {
+            do {
+                health = try await service.health(now: now.timeIntervalSince1970)
+            } catch {
+                log.error("the format check failed: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
@@ -289,13 +373,9 @@ public final class AppModel {
         let period = settings.selectedPeriod
         if period == .today {
             selectedReport = todayReport
-            selectedIsStale = false
         } else if popoverVisible {
             let found = await report(period)
             if settings.selectedPeriod == period { selectedReport = found }
-            selectedIsStale = false
-        } else {
-            selectedIsStale = true
         }
     }
 
@@ -308,10 +388,12 @@ public final class AppModel {
         do {
             let found = try await service.report(
                 period: period, now: now, rebuildThreshold: settings.rebuildThresholdTokens)
+            // Older minutes and generations can never be asked for again.
+            cache = cache.filter { $0.key.minute == key.minute && $0.key.generation == key.generation }
             cache[key] = found
             return found
         } catch {
-            phase = .indexError(String(describing: error))
+            indexFailed(error)
             return nil
         }
     }
@@ -324,7 +406,7 @@ public final class AppModel {
             warnings = try await service.expiryWarnings(
                 registry: state, now: now.timeIntervalSince1970, warningContextTokens: settings.warningContextTokens)
         } catch {
-            phase = .indexError(String(describing: error))
+            indexFailed(error)
             return
         }
         await reconcileNotifications()
@@ -381,6 +463,9 @@ public final class AppModel {
     }
 
     private func reconcileOnce() async {
+        // Settings and permission changes come between ticks: a notification time that passed since the last
+        // tick must not be scheduled (BR-N3).
+        now = clock()
         let desired = desiredNotifications()
         let pending = await scheduler.pendingIdentifiers().filter { $0.hasPrefix(Self.notificationPrefix) }
         let wanted = Set(desired.map(\.identifier))
@@ -408,10 +493,13 @@ public final class AppModel {
             center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in await self?.minuteTick() }
             })
-        observers.append(
-            NotificationCenter.default.addObserver(forName: .NSCalendarDayChanged, object: nil, queue: .main) {
-                [weak self] _ in Task { @MainActor in await self?.refreshAll() }
-            })
+        // A new day, time zone or clock moves "today" and the minutes left.
+        for name in [Notification.Name.NSCalendarDayChanged, .NSSystemTimeZoneDidChange, .NSSystemClockDidChange] {
+            observers.append(
+                NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    Task { @MainActor in await self?.refreshAll() }
+                })
+        }
         // Notification permission may have changed in System Settings while the app was in the background.
         observers.append(
             NotificationCenter.default.addObserver(
@@ -458,7 +546,6 @@ public final class AppModel {
                 let period = settings.selectedPeriod
                 let found = await report(period)
                 if settings.selectedPeriod == period { selectedReport = found }
-                selectedIsStale = false
                 await minuteTick()
             }
         }

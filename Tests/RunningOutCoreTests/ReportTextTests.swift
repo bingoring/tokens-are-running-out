@@ -21,6 +21,16 @@ struct ReportTextTests {
         #expect(ReportText.percent(1.0, width: 6) == "100.0%")
     }
 
+    @Test("the tokens line, shared by report and stats, is empty when there were no calls")
+    func tokensLine() {
+        #expect(
+            ReportText.tokensLine(calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0) == "tokens              ")
+        #expect(
+            ReportText.tokensLine(calls: 2, input: 4, output: 20, cacheRead: 60_000, cacheWrite: 1_234_567)
+                == "tokens              input=4 output=20 cache_read=60,000 cache_write=1,234,567")
+        #expect(ReportText.count(-1_234) == "-1,234")
+    }
+
     @Test("an empty report prints the header lines only, like the prototype")
     func emptyReport() {
         let text = ReportText.render(UsageReport(from: 0, to: 1), fromText: "A", toText: "B")

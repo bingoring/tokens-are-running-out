@@ -85,12 +85,14 @@ public final class UserNotificationScheduler: NSObject, NotificationScheduling, 
     }
 
     public func add(_ request: ExpiryNotificationRequest) async {
+        // A time already past is not moved to "in one second" (BR-N3).
+        guard request.fireAt.timeIntervalSinceNow > 0 else { return }
         let content = UNMutableNotificationContent()
         content.title = request.title
         content.body = request.body
         content.sound = .default
         let trigger = UNTimeIntervalNotificationTrigger(
-            timeInterval: max(1, request.fireAt.timeIntervalSinceNow), repeats: false)
+            timeInterval: request.fireAt.timeIntervalSinceNow, repeats: false)
         do {
             try await center.add(
                 UNNotificationRequest(identifier: request.identifier, content: content, trigger: trigger))

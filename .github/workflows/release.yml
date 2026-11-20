@@ -19,29 +19,73 @@ jobs:
   release:
     # Forks have no signing secrets.
     if: github.repository == 'bingoring/tokens-are-running-out'
+    # The secrets live only in this environment, which waits for a required reviewer and accepts only v* tags
+    # (and main, for the Update Homebrew tap workflow).
+    environment: release
     runs-on: macos-latest
     timeout-minutes: 60
     env:
       TAG: ${{ github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # CFBundleVersion is the commit count
+          fetch-depth: 0 # CFBundleVersion is the commit count; the main check needs origin/main
           persist-credentials: false
 
       - name: Check the tag
         id: tag
         run: |
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+          # The whole tag must be vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-rc.N: numbers without leading
+          # zeros, and nothing else (no space or newline, nothing before or after).
+          bad() {
             echo "::error::Tag must look like v1.2.3 or v1.2.3-rc.1"
             exit 1
-          fi
-          version="${TAG#v}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          case "$version" in
-            *-rc.*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
-            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          }
+          case "$TAG" in
+            v*) ;;
+            *) bad ;;
           esac
+          version="${TAG#v}"
+          case "$version" in
+            *-rc.*) base="${version%%-rc.*}" rc="${version#*-rc.}" prerelease=true ;;
+            *) base="$version" rc="" prerelease=false ;;
+          esac
+          case "$base" in
+            "" | *[!0-9.]* | .* | *.) bad ;;
+          esac
+          IFS=.
+          set -- $base # digits and dots only, split on the dots
+          unset IFS
+          [ $# -eq 3 ] || bad
+          if [ "$prerelease" = true ]; then
+            set -- "$@" "$rc"
+          fi
+          for part in "$@"; do
+            case "$part" in
+              "" | *[!0-9]* | 0?*) bad ;;
+            esac
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      - name: A stable release is a commit on main
+        if: steps.tag.outputs.prerelease == 'false'
+        run: |
+          # Pre-releases may come from a PR branch to try the pipeline; a stable release only from main.
+          commit=$(git rev-parse --verify "HEAD^{commit}")
+          tagged=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+          if [ "$commit" != "$tagged" ]; then
+            echo "::error::The checkout ($commit) is not the commit $TAG points at ($tagged)"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/main^{commit}" > /dev/null; then
+            echo "::error::origin/main was not fetched, so the tag cannot be checked against it"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$commit" refs/remotes/origin/main; then
+            echo "::error::$TAG points at $commit, which is not on main. Stable releases are tagged on main."
+            exit 1
+          fi
 
       - name: Check that the secrets exist (names only)
         env:
@@ -77,6 +121,26 @@ jobs:
             exit 1
           fi
 
+      # The tagged commit passes the same checks as CI before anything is signed.
+      - name: Build app and tests (warnings are errors)
+        run: swift build --build-tests -Xswiftc -warnings-as-errors
+
+      - name: Test
+        run: swift test
+
+      - name: Anti-goals in the source (no network, writes only the index, no real transcripts)
+        run: python3 -I scripts/check-anti-goals.py
+
+      - name: Build the universal app
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: scripts/build-app.sh --release "$VERSION"
+
+      - name: No network symbols or frameworks in either slice, no entitlements
+        run: scripts/check-binary.sh .build/apps/TokensAreRunningOut.app
+
+      # The signing secrets are written to disk only now, after everything that runs the tagged code's build
+      # and tests.
       - name: Import the Developer ID certificate into a temporary keychain
         id: signing
         env:
@@ -112,11 +176,6 @@ jobs:
           (umask 077 && printf '%s' "$P8_BASE64" | base64 --decode > "$key")
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Build the universal app
-        env:
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: scripts/build-app.sh --release "$VERSION"
-
       - name: Sign, notarize, staple and package
         env:
           VERSION: ${{ steps.tag.outputs.version }}
@@ -151,8 +210,9 @@ jobs:
           VERSION: ${{ steps.tag.outputs.version }}
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
+          # Only moves the cask forward: a release older than the cask's version leaves it as it is.
           # If only this step fails, run the "Update Homebrew tap" workflow for this tag; it does not rebuild.
-          scripts/update-tap.sh "$VERSION" "$(cut -d ' ' -f 1 ".build/dist/TokensAreRunningOut-$VERSION.zip.sha256")"
+          scripts/update-tap.sh "$VERSION" "$(cut -d ' ' -f 1 ".build/dist/TokensAreRunningOut-$VERSION.zip.sha256")" --only-newer
 
       - name: Remove the keychain and keys
         if: always()

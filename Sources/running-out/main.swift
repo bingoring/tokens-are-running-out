@@ -17,10 +17,6 @@ func warn(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
-func grouped(_ value: Int) -> String {
-    value.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
-}
-
 func seconds(since start: ContinuousClock.Instant) -> String {
     let elapsed = ContinuousClock.now - start
     return String(format: "%.2fs", Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18)
@@ -29,7 +25,7 @@ func seconds(since start: ContinuousClock.Instant) -> String {
 func report(_ summary: IndexSummary) -> String {
     for skipped in summary.skippedFiles { warn("skipped \(skipped.path): \(skipped.reason)") }
     return "files scanned \(summary.filesScanned), read \(summary.filesRead), removed \(summary.filesRemoved), "
-        + "calls added \(grouped(summary.callsAdded)), parse failures \(summary.parseFailures), "
+        + "calls added \(ReportText.count(summary.callsAdded)), parse failures \(summary.parseFailures), "
         + "skipped \(summary.skippedFiles.count)"
 }
 
@@ -38,8 +34,12 @@ func openService(root: URL, database: URL) -> IndexService {
     guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
         fail("No Claude Code transcripts at \(root.path)", code: 3)
     }
+    // Only the app's own index is replaced when damaged; a file someone pointed --db at is reported instead.
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let isAppIndex = database.standardizedFileURL == CLIParser.defaultDatabase(home: home).standardizedFileURL
     do {
-        return try IndexService(root: root, databaseURL: database)
+        return try IndexService(
+            root: root, databaseURL: database, opening: isAppIndex ? .replaceUnusable : .refuseUnknown)
     } catch {
         fail("Cannot open index at \(database.path): \(error)", code: 4)
     }
@@ -61,10 +61,11 @@ func run(_ command: CLICommand) async throws {
         let window =
             "\(style.format(Date(timeIntervalSince1970: from))) .. \(style.format(Date(timeIntervalSince1970: to)))"
         print("window              \(window)")
-        print("api calls           \(grouped(totals.calls))")
+        print("api calls           \(ReportText.count(totals.calls))")
         print(
-            "tokens              input=\(grouped(totals.inputTokens)) output=\(grouped(totals.outputTokens)) "
-                + "cache_read=\(grouped(totals.cacheReadTokens)) cache_write=\(grouped(totals.cacheWriteTokens))")
+            ReportText.tokensLine(
+                calls: totals.calls, input: totals.inputTokens, output: totals.outputTokens,
+                cacheRead: totals.cacheReadTokens, cacheWrite: totals.cacheWriteTokens))
         let mismatches = try await service.usageMismatchCount()
         if mismatches > 0 { warn("calls whose copies disagree on usage: \(mismatches)") }
 
@@ -83,11 +84,11 @@ func run(_ command: CLICommand) async throws {
         _ = report(try await service.indexAll())
         let health = try await service.health()
         print(
-            "assistant lines (7 days)   \(grouped(health.assistantLines)), not calls \(grouped(health.assistantWithoutCall))"
-        )
+            "assistant lines (7 days)   \(ReportText.count(health.assistantLines)), "
+                + "not calls \(ReportText.count(health.assistantWithoutCall))")
         print(
-            "main lines appended        \(grouped(health.mainLinesAppended)), calls \(grouped(health.mainCallsAppended))"
-        )
+            "main lines appended        \(ReportText.count(health.mainLinesAppended)), "
+                + "calls \(ReportText.count(health.mainCallsAppended))")
         print("format change              \(health.kind)")
 
     case .sessions(let root, let database):
@@ -108,7 +109,7 @@ func run(_ command: CLICommand) async throws {
         for warning in try await service.expiryWarnings(registry: state, now: now) {
             print(
                 "warning                    \(Int(((warning.expiresAt - now) / 60).rounded(.up))) min left, "
-                    + "context \(grouped(warning.contextTokens)), \(ReportText.money(warning.rebuildCost)), "
+                    + "context \(ReportText.count(warning.contextTokens)), \(ReportText.money(warning.rebuildCost)), "
                     + "ttl \(warning.ttl.rawValue), status \(warning.status)")
         }
 

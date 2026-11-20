@@ -121,12 +121,28 @@ public struct UsageReport: Sendable, Equatable {
     }
 
     /// The menu bar number: cache-write cost of rebuilds after a break, over all cost (R13).
-    public var idleRebuildShare: Double { share(shortBreak.cost + longBreak.cost) }
+    public var idleRebuildShare: Double { share(shortBreak.cost |+ longBreak.cost) }
 
     /// What resuming before the cache expired would have saved, over all cost (R12).
     public var reducibleShare: Double { share(reducibleCost) }
 
     private func share(_ part: Int) -> Double { totalCost == 0 ? 0 : Double(part) / Double(totalCost) }
+}
+
+infix operator |+ : AdditionPrecedence
+infix operator |+= : AssignmentPrecedence
+
+extension Int {
+    /// Saturating addition: a sum past `Int.max` (or below `Int.min`) stays at the limit instead of trapping.
+    static func |+ (lhs: Int, rhs: Int) -> Int {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        guard overflow else { return sum }
+        return rhs > 0 ? .max : .min
+    }
+
+    static func |+= (lhs: inout Int, rhs: Int) {
+        lhs = (lhs |+ rhs)
+    }
 }
 
 public final class UsageAnalyzer {
@@ -154,65 +170,68 @@ public final class UsageAnalyzer {
                 var advisorCost = 0
                 var unpriced = Set<String>()
                 var consulted = false
+                // Every sum saturates (`|+=`). New lines keep one call far inside Int64 (`RecordParser.tokenLimit`
+                // and `iterationLimit`), but rows an older build indexed are not checked again. Only input worth
+                // over about 9.2 billion USD reaches the limit, where the prototype's exact integers part ways.
                 for part in call.parts {
                     let model = part.model ?? call.model
                     let partCost = prices.cost(of: part, model: model)
                     if !partCost.known { unpriced.insert(model) }
-                    cost.cacheWrite += partCost.cacheWrite
-                    cost.other += partCost.other
+                    cost.cacheWrite |+= partCost.cacheWrite
+                    cost.other |+= partCost.other
                     if part.kind == .advisor {
                         consulted = true
-                        report.advisor.inputTokens += part.inputTokens
-                        report.advisor.outputTokens += part.outputTokens
-                        report.advisor.cost += partCost.total
-                        advisorCost += partCost.total
+                        report.advisor.inputTokens |+= part.inputTokens
+                        report.advisor.outputTokens |+= part.outputTokens
+                        report.advisor.cost |+= partCost.total
+                        advisorCost |+= partCost.total
                     }
                     if item.isRebuild, RebuildClassifier.isRebuild(part, threshold: rebuildThreshold) {
-                        rebuilt.cost += partCost.cacheWrite
-                        rebuilt.tokens += part.cacheWriteTokens
-                        rebuilt.asRead += partCost.writtenAsRead
+                        rebuilt.cost |+= partCost.cacheWrite
+                        rebuilt.tokens |+= part.cacheWriteTokens
+                        rebuilt.asRead |+= partCost.writtenAsRead
                     }
                 }
                 if consulted { report.advisor.calls += 1 }
                 for model in unpriced { report.unpricedModels[model, default: 0] += 1 }
                 report.calls += 1
-                report.inputTokens += call.inputTokens
-                report.outputTokens += call.outputTokens
-                report.cacheReadTokens += call.cacheReadTokens
-                report.cacheWriteTokens += call.cacheWriteTokens
-                report.totalCost += cost.total
+                report.inputTokens |+= call.inputTokens
+                report.outputTokens |+= call.outputTokens
+                report.cacheReadTokens |+= call.cacheReadTokens
+                report.cacheWriteTokens |+= call.cacheWriteTokens
+                report.totalCost |+= cost.total
                 if item.isRebuild {
                     report.rebuildCount += 1
-                    report.rebuildTokens += rebuilt.tokens
+                    report.rebuildTokens |+= rebuilt.tokens
                 }
 
                 // Advisor consults have their own bucket; R7: subagents take the rest of their cost;
                 // R8: a rebuild's write goes to its cause.
-                report.bucketCosts[.advisor, default: 0] += advisorCost
+                report.bucketCosts[.advisor, default: 0] |+= advisorCost
                 guard file.kind == .main else {
-                    report.bucketCosts[.subagents, default: 0] += cost.total - advisorCost
+                    report.bucketCosts[.subagents, default: 0] |+= cost.total - advisorCost
                     if item.isRebuild { report.subagentRebuildCount += 1 }
                     continue
                 }
                 guard item.isRebuild, let cause = item.cause else {
-                    report.bucketCosts[.normalWork, default: 0] += cost.total - advisorCost
+                    report.bucketCosts[.normalWork, default: 0] |+= cost.total - advisorCost
                     continue
                 }
-                report.bucketCosts[.normalWork, default: 0] += cost.total - rebuilt.cost - advisorCost
-                report.bucketCosts[Self.bucket(of: cause), default: 0] += rebuilt.cost
+                report.bucketCosts[.normalWork, default: 0] |+= cost.total - rebuilt.cost - advisorCost
+                report.bucketCosts[Self.bucket(of: cause), default: 0] |+= rebuilt.cost
                 report.mainRebuildCounts[cause, default: 0] += 1
                 var reducible = 0
                 switch cause {
                 case .expiredShortBreak:
                     reducible = rebuilt.cost - rebuilt.asRead
-                    report.reducibleCost += reducible
+                    report.reducibleCost |+= reducible
                     report.shortBreak.count += 1
-                    report.shortBreak.tokens += rebuilt.tokens
-                    report.shortBreak.cost += rebuilt.cost
+                    report.shortBreak.tokens |+= rebuilt.tokens
+                    report.shortBreak.cost |+= rebuilt.cost
                 case .expiredLongBreak:
                     report.longBreak.count += 1
-                    report.longBreak.tokens += rebuilt.tokens
-                    report.longBreak.cost += rebuilt.cost
+                    report.longBreak.tokens |+= rebuilt.tokens
+                    report.longBreak.cost |+= rebuilt.cost
                 default:
                     break
                 }
@@ -279,7 +298,17 @@ public enum ReportText {
     }
 
     /// Python `{:,}`.
-    static func count(_ value: Int) -> String { grouped(String(value)) }
+    public static func count(_ value: Int) -> String { grouped(String(value)) }
+
+    /// The tokens line of `report` and `stats`. The prototype prints no values when there were no calls.
+    public static func tokensLine(calls: Int, input: Int, output: Int, cacheRead: Int, cacheWrite: Int) -> String {
+        let values =
+            calls == 0
+            ? ""
+            : "input=\(count(input)) output=\(count(output)) cache_read=\(count(cacheRead)) "
+                + "cache_write=\(count(cacheWrite))"
+        return "tokens              " + values
+    }
 
     private static func grouped(_ digits: String) -> String {
         var result = ""
@@ -310,12 +339,10 @@ public enum ReportText {
         var lines: [String] = []
         lines.append("window              \(fromText) .. \(toText)")
         lines.append("api calls           \(count(report.calls))")
-        let tokens =
-            report.calls == 0
-            ? ""
-            : "input=\(count(report.inputTokens)) output=\(count(report.outputTokens)) "
-                + "cache_read=\(count(report.cacheReadTokens)) cache_write=\(count(report.cacheWriteTokens))"
-        lines.append("tokens              " + tokens)
+        lines.append(
+            tokensLine(
+                calls: report.calls, input: report.inputTokens, output: report.outputTokens,
+                cacheRead: report.cacheReadTokens, cacheWrite: report.cacheWriteTokens))
         let rebuildShare =
             report.cacheWriteTokens == 0 ? 0 : Double(report.rebuildTokens) / Double(report.cacheWriteTokens)
         lines.append(

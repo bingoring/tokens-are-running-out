@@ -133,17 +133,20 @@ public enum RecordParser {
             guard let sessionID = raw.sessionId, let title = raw.customTitle else { return .rejected }
             return .title(sessionID: sessionID, title: title)
         case "assistant":
-            return call(from: raw)
+            return call(from: raw, line: line)
         default:
             return .rejected
         }
     }
 
-    /// Token counts above this are not real usage. The limit also keeps every cost sum far from overflowing.
+    /// Token counts above this are not real usage. With `iterationLimit` it keeps one call's cost far inside Int64
+    /// (about 1.2e17 nano-USD at the highest list price); sums over many calls saturate in `UsageAnalyzer` instead.
     static let tokenLimit = 1_000_000_000
+    /// More steps than this in one call are not real usage, and the call is dropped as malformed.
+    static let iterationLimit = 1_000
 
     /// R2: only real API calls with an id, a timestamp and usage.
-    private static func call(from raw: RawLine) -> ParsedLine {
+    private static func call(from raw: RawLine, line: Data) -> ParsedLine {
         // Matches the prototype oracle: an empty usage object or an empty id is not a call.
         // Synthetic messages (API errors, limit replies) are known records, not a sign of a format change.
         if raw.message?.model == "<synthetic>" { return .rejected }
@@ -152,15 +155,25 @@ public enum RecordParser {
             let timestamp = raw.timestamp.flatMap(Timestamp.parse)
         else { return .assistantWithoutCall(timestamp: raw.timestamp.flatMap(Timestamp.parse)) }
 
+        // The prototype reads a count written as `7.0` or `1e1` as a float, not a count: at the top level the line
+        // is no call, in a step the steps are unreadable and the top-level usage is used.
+        let fractions = fractionalCounts(in: line)
+        if fractions.topLevel { return .assistantWithoutCall(timestamp: timestamp) }
+        let steps = fractions.inSteps ? nil : usage.iterations
+
+        guard (steps?.count ?? 0) <= iterationLimit else { return .malformed }
         let top = part(
             usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens,
             usage.cache_creation)
-        var iterations = (usage.iterations ?? []).map { step in
+        // A step whose model is not a string is dropped; with no step left, the top-level usage is used.
+        var iterations = (steps ?? []).compactMap { step -> UsagePart? in
+            guard case .valid(let stepModel) = step.model else { return nil }
             var result = part(
                 step.input_tokens, step.output_tokens, step.cache_read_input_tokens, step.cache_creation_input_tokens,
                 step.cache_creation)
             result.kind = step.type == "advisor_message" ? .advisor : .message
-            result.model = step.model == model ? nil : step.model
+            // No model, or an empty one, means the call's model.
+            result.model = stepModel.flatMap { $0.isEmpty || $0 == model ? nil : $0 }
             return result
         }
         let counts = ([top] + iterations).flatMap {
@@ -179,6 +192,60 @@ public enum RecordParser {
                 lineSessionID: raw.sessionId, inputTokens: top.inputTokens, outputTokens: top.outputTokens,
                 cacheReadTokens: top.cacheReadTokens, cacheWriteTokens: top.cacheWriteTokens,
                 cacheWrite1h: top.cacheWrite1h, cacheWrite5m: top.cacheWrite5m, ttl: ttl, iterations: iterations))
+    }
+
+    /// Whether a top-level count, or a count in a step, is written as a fraction or with an exponent. The decoder
+    /// reads `7.0` as 7, so only the JSON objects tell; they are built only for the rare line that has such a number.
+    private static func fractionalCounts(in line: Data) -> (topLevel: Bool, inSteps: Bool) {
+        guard hasFractionalNumber(line),
+            let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let usage = (object["message"] as? [String: Any])?["usage"] as? [String: Any]
+        else { return (false, false) }
+        func isFraction(_ value: Any?) -> Bool {
+            guard let number = value as? NSNumber else { return false }
+            let type = String(cString: number.objCType)
+            return type == "d" || type == "f"
+        }
+        func hasFraction(_ step: [String: Any]) -> Bool {
+            let breakdown = step["cache_creation"] as? [String: Any] ?? [:]
+            return RawUsage.countKeys.contains { isFraction(step[$0]) }
+                || RawCacheCreation.countKeys.contains { isFraction(breakdown[$0]) }
+        }
+        let steps = usage["iterations"] as? [Any] ?? []
+        return (hasFraction(usage), steps.contains { ($0 as? [String: Any]).map(hasFraction) ?? false })
+    }
+
+    /// Whether the line has a number with a fraction or an exponent outside its strings.
+    static func hasFractionalNumber(_ line: Data) -> Bool {
+        line.withUnsafeBytes { bytes in
+            var inString = false
+            var escaped = false
+            var inNumber = false
+            for byte in bytes {
+                if inString {
+                    if escaped {
+                        escaped = false
+                    } else if byte == UInt8(ascii: "\\") {
+                        escaped = true
+                    } else if byte == UInt8(ascii: "\"") {
+                        inString = false
+                    }
+                    continue
+                }
+                switch byte {
+                case UInt8(ascii: "\""):
+                    inString = true
+                    inNumber = false
+                case UInt8(ascii: "-"), UInt8(ascii: "0")...UInt8(ascii: "9"):
+                    inNumber = true
+                case UInt8(ascii: "."), UInt8(ascii: "e"), UInt8(ascii: "E"):
+                    if inNumber { return true }
+                default:
+                    inNumber = false
+                }
+            }
+            return false
+        }
     }
 
     private static func part(
@@ -253,6 +320,11 @@ private struct RawUsage: Decodable {
         case iterations
     }
 
+    /// The token counts of a usage object or a step.
+    static let countKeys = [
+        "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+    ]
+
     private struct AnyKey: CodingKey {
         var stringValue: String
         var intValue: Int? { nil }
@@ -275,17 +347,51 @@ private struct RawUsage: Decodable {
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
 private struct RawIteration: Decodable {
+    enum Model {
+        /// A string, or nil when the step has none.
+        case valid(String?)
+        /// Not a string: the step is dropped.
+        case invalid
+    }
+
+    /// Anything but "advisor_message", a string or not, is a main step.
     var type: String?
-    var model: String?
+    var model: Model
     var input_tokens: Int?
     var output_tokens: Int?
     var cache_read_input_tokens: Int?
     var cache_creation_input_tokens: Int?
     var cache_creation: RawCacheCreation?
+
+    enum CodingKeys: String, CodingKey {
+        case type, model, input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens
+        case cache_creation
+    }
+
+    // A count of another type throws, so the steps are unreadable and the top-level usage is used.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? c.decodeIfPresent(String.self, forKey: .type)
+        if try !c.contains(.model) || c.decodeNil(forKey: .model) {
+            model = .valid(nil)
+        } else if let name = try? c.decode(String.self, forKey: .model) {
+            model = .valid(name)
+        } else {
+            model = .invalid
+        }
+        input_tokens = try c.decodeIfPresent(Int.self, forKey: .input_tokens)
+        output_tokens = try c.decodeIfPresent(Int.self, forKey: .output_tokens)
+        cache_read_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_read_input_tokens)
+        cache_creation_input_tokens = try c.decodeIfPresent(Int.self, forKey: .cache_creation_input_tokens)
+        cache_creation = try c.decodeIfPresent(RawCacheCreation.self, forKey: .cache_creation)
+    }
 }
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
 private struct RawCacheCreation: Decodable {
     var ephemeral_1h_input_tokens: Int?
     var ephemeral_5m_input_tokens: Int?
+
+    /// Only these are read; other keys, of any value, are ignored.
+    static let countKeys = ["ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"]
 }

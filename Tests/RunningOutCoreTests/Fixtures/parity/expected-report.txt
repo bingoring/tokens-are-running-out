@@ -1,21 +1,21 @@
 window              2026-11-10T00:00:00Z .. 2026-11-17T00:00:00Z
-api calls           14
-tokens              input=39 output=1,490 cache_read=380,000 cache_write=638,700
-rebuilds            10 calls, 637,000 tokens (99.7% of cache writes)
+api calls           24
+tokens              input=59 output=2,280 cache_read=450,000 cache_write=1,174,199
+rebuilds            18 calls, 1,122,000 tokens (95.6% of cache writes)
   in subagents      2
-  in main sessions  8: expired 3, unknown 2, after compaction 1, model changed 1, version changed 1
-  expired, short break  2 calls, 145,000 tokens
-  expired, long break   1 calls, 80,000 tokens
-cost (API list)     $3.29
-  normal work                   2.0%  $0.06
-  rebuild after short break    26.1%  $0.86
-  rebuild after long break      9.7%  $0.32
-  session start & compaction   13.4%  $0.44
-  subagents                     9.4%  $0.31
-  advisor                      10.6%  $0.35
-  model change & update        13.6%  $0.45
-  unknown                      15.2%  $0.50
+  in main sessions  16: expired 7, unknown 5, after compaction 1, model changed 1, session start 1, version changed 1
+  expired, short break  5 calls, 335,000 tokens
+  expired, long break   2 calls, 140,000 tokens
+cost (API list)     $7.41
+  normal work                   6.7%  $0.50
+  rebuild after short break    32.1%  $2.38
+  rebuild after long break     10.8%  $0.80
+  session start & compaction   12.4%  $0.92
+  subagents                     4.2%  $0.31
+  advisor                       4.7%  $0.35
+  model change & update         6.0%  $0.45
+  unknown                      23.0%  $1.71
 advisor calls       2, input=38,000 output=700
-menu bar (idle rebuilds) 35.8%
-reducible (short breaks) 25.5%
+menu bar (idle rebuilds) 42.9%
+reducible (short breaks) 31.3%
 unpriced models     claude-opus-5-7 x1

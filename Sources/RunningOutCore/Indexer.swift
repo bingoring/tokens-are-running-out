@@ -15,9 +15,96 @@ public struct SkippedFile: Sendable, Equatable {
     public var reason: String
 }
 
+/// How an index file is opened (R-1). The index is derived data, but only the app's own file may be replaced.
+public enum IndexOpening: Sendable, Equatable {
+    /// A path someone chose (the CLI's --db): a file this app did not make is left alone and reported.
+    case refuseUnknown
+    /// The app's own index: a damaged or unknown file there is replaced.
+    case replaceUnusable
+    /// The app's own index after damage found while running: start over even if the file opens.
+    case startOver
+}
+
+public enum IndexOpenError: Error, Equatable, CustomStringConvertible {
+    case notAnIndex(String)
+    case insideReadOnlyFolder(database: String, folder: String)
+    case unresolvablePath(String)
+
+    public var description: String {
+        switch self {
+        case .notAnIndex(let path): "\(path) is not a Tokens Are Running Out index; it was left unchanged."
+        case .insideReadOnlyFolder(_, let folder):
+            "The index cannot live inside \(folder); it must stay read-only."
+        case .unresolvablePath(let path): "\(path) has too many symbolic links to follow."
+        }
+    }
+}
+
+/// R9: the index never lives where Claude Code's data or the transcripts are.
+public enum IndexLocation {
+    public static func check(database: URL, root: URL, home: URL) throws(IndexOpenError) {
+        let path = try physical(database)
+        for folder in [home.appendingPathComponent(".claude"), root] where try isInside(path, folder) {
+            throw .insideReadOnlyFolder(database: database.path, folder: folder.standardizedFileURL.path)
+        }
+    }
+
+    /// The path the system actually reaches: every link followed in order, even one whose target does not
+    /// exist yet, and `..` applied after the links before it. The index is checked, created and opened at this
+    /// one path, so the path checked is the path written.
+    public static func physical(_ url: URL) throws(IndexOpenError) -> URL {
+        var resolved: [String] = []
+        var pending = url.path.split(separator: "/").map(String.init)
+        var links = 0
+        while !pending.isEmpty {
+            let part = pending.removeFirst()
+            if part.isEmpty || part == "." { continue }
+            if part == ".." {
+                if !resolved.isEmpty { resolved.removeLast() }
+                continue
+            }
+            let candidate = "/" + (resolved + [part]).joined(separator: "/")
+            guard let target = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
+                resolved.append(part)
+                continue
+            }
+            links += 1
+            guard links <= 40 else { throw .unresolvablePath(url.path) }
+            if target.hasPrefix("/") { resolved = [] }
+            pending = target.split(separator: "/").map(String.init) + pending
+        }
+        return URL(fileURLWithPath: "/" + resolved.joined(separator: "/"))
+    }
+
+    /// Inside by spelling, ignoring letter case (APFS ignores it by default, so `~/.CLAUDE` is `~/.claude`), or
+    /// inside the same folder reached another way (a firmlink such as `/System/Volumes/Data`, another Unicode
+    /// form): an existing ancestor with the folder's device and inode. On a case-sensitive volume this refuses
+    /// a little more than it must.
+    private static func isInside(_ path: URL, _ folder: URL) throws(IndexOpenError) -> Bool {
+        let folder = try physical(folder)
+        let (spelled, inside) = (path.path.lowercased(), folder.path.lowercased())
+        if spelled == inside || spelled.hasPrefix(inside == "/" ? "/" : inside + "/") { return true }
+        guard let target = identity(of: folder) else { return false }
+        var ancestor = path
+        while true {
+            if identity(of: ancestor) == target { return true }
+            guard ancestor.path != "/" else { return false }
+            ancestor.deleteLastPathComponent()
+        }
+    }
+
+    private static func identity(of url: URL) -> [UInt64]? {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        return [UInt64(UInt32(bitPattern: info.st_dev)), info.st_ino]
+    }
+}
+
 public struct IndexSummary: Sendable, Equatable {
     public var filesScanned = 0
     public var filesRead = 0
+    /// Files emptied, replaced or rewritten: their old calls are gone even if nothing new was read.
+    public var filesReset = 0
     public var filesRemoved = 0
     public var callsAdded = 0
     public var parseFailures = 0
@@ -26,6 +113,7 @@ public struct IndexSummary: Sendable, Equatable {
     mutating func add(_ other: IndexSummary) {
         filesScanned += other.filesScanned
         filesRead += other.filesRead
+        filesReset += other.filesReset
         filesRemoved += other.filesRemoved
         callsAdded += other.callsAdded
         parseFailures += other.parseFailures
@@ -115,20 +203,23 @@ public final class Indexer {
     /// Seconds since 1970; the day new lines were read counts toward the format-change check.
     private let clock: () -> Double
 
-    public init(root: URL, databaseURL: URL, clock: @escaping () -> Double = { Date().timeIntervalSince1970 }) throws {
+    static let applicationID: Int32 = 0x5441_524F  // "TARO"
+
+    public init(
+        root: URL, databaseURL: URL, opening: IndexOpening = .refuseUnknown,
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        clock: @escaping () -> Double = { Date().timeIntervalSince1970 }
+    ) throws {
         self.root = TranscriptLocator.canonical(root)
         self.clock = clock
-        let databaseFolder = databaseURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: databaseFolder, withIntermediateDirectories: true)
-        do {
-            db = try Indexer.open(databaseURL)
-        } catch let error as SQLiteError where error.isCorruption {
-            // The index is derived data: a damaged file is replaced, never repaired.
-            for suffix in ["", "-wal", "-shm"] {
-                try? FileManager.default.removeItem(atPath: databaseURL.path + suffix)
-            }
-            db = try Indexer.open(databaseURL)
-        }
+        // One physical path for the check, the folder and the database, so a link cannot redirect what was checked.
+        let database = try IndexLocation.physical(databaseURL)
+        try IndexLocation.check(database: database, root: root, home: home)
+        // Only folders created here are made private; an existing folder someone chose is left as it is.
+        try FileManager.default.createDirectory(
+            at: database.deletingLastPathComponent(), withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        db = try Indexer.open(database, opening)
     }
 
     // MARK: - Indexing
@@ -138,7 +229,8 @@ public final class Indexer {
     @discardableResult
     public func indexAll(progress: ((IndexProgress) -> Void)? = nil) throws -> IndexSummary {
         var summary = IndexSummary()
-        let isInitial = try db.queryRow("SELECT COUNT(*) FROM files") { $0.int(0) } == 0
+        // A first index that was interrupted is still the first: completion is recorded, not inferred from files.
+        let isInitial = try !hasCompletedFullIndex()
         let scan = TranscriptLocator.findAll(root: root)
         let present = Set(scan.refs.map(\.url.path))
         for path in try knownPaths() where !present.contains(path) && !scan.isUnderUnreadableDirectory(path) {
@@ -171,8 +263,7 @@ public final class Indexer {
         progress?(report)
         try db.run("DELETE FROM read_stats WHERE day < ?", [.int(Indexer.day(clock()) - 30)])
         try db.run(
-            "INSERT OR REPLACE INTO meta(key, value) VALUES('last_full_index_at', ?)",
-            [.text(String(Date().timeIntervalSince1970))])
+            "INSERT OR REPLACE INTO meta(key, value) VALUES('last_full_index_at', ?)", [.text(String(clock()))])
         return summary
     }
 
@@ -230,6 +321,7 @@ public final class Indexer {
             var file = try fileRow(path: ref.url.path) ?? insertFile(ref, stat)
             if try file.inode != stat.inode || stat.size < file.offset || headChanged(file, at: ref.url) {
                 try resetFile(file)  // R7: replaced, truncated or rewritten in place
+                if file.offset > 0 { summary.filesReset = 1 }  // its calls are gone even if nothing new is read
                 file.offset = 0
                 file.nextSeq = 0
             }
@@ -390,8 +482,11 @@ public final class Indexer {
     }
 
     /// True when at least one transcript has been indexed: there are earlier results to show.
-    public func hasIndexedFiles() throws -> Bool {
-        try db.queryRow("SELECT COUNT(*) FROM files") { $0.int(0) } ?? 0 > 0
+    /// True once a full scan has finished; an interrupted first index still shows its progress (W1.5).
+    public func hasIndexedFiles() throws -> Bool { try hasCompletedFullIndex() }
+
+    private func hasCompletedFullIndex() throws -> Bool {
+        try db.queryRow("SELECT COUNT(*) FROM meta WHERE key = 'last_full_index_at'") { $0.int(0) } ?? 0 > 0
     }
 
     /// Format-change check (2-3 BR-H1): assistant lines over the last seven days, appended lines per day over
@@ -506,48 +601,143 @@ public final class Indexer {
         var headHash: Int64
     }
 
-    private static func open(_ url: URL) throws -> SQLiteDatabase {
-        let db = try SQLiteDatabase(path: url.path)
+    private static func open(_ url: URL, _ opening: IndexOpening) throws -> SQLiteDatabase {
+        if opening == .startOver { try removeIndexFiles(at: url) }
+        do {
+            return try openOwnIndex(url)
+        } catch {
+            // The index is derived data: at the app's own location, a damaged or unknown file is replaced.
+            guard opening != .refuseUnknown, isUnusable(error) else { throw error }
+            try removeIndexFiles(at: url)
+            return try openOwnIndex(url)
+        }
+    }
+
+    private static func isUnusable(_ error: Error) -> Bool {
+        if case .notAnIndex = error as? IndexOpenError { return true }
+        return (error as? SQLiteError)?.isCorruption == true
+    }
+
+    /// Removes a regular file and its side files. A folder, link or pipe at the index path is reported instead:
+    /// nothing but a file is ever removed.
+    private static func removeIndexFiles(at url: URL) throws {
+        if let type = fileType(url), type != .typeRegular { throw IndexOpenError.notAnIndex(url.path) }
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            try? FileManager.default.removeItem(atPath: url.path + suffix)
+        }
+    }
+
+    /// The type of the item itself (a link is not followed), or nil when nothing is there.
+    private static func fileType(_ url: URL) -> FileAttributeType? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+    }
+
+    private static func openOwnIndex(_ url: URL) throws -> SQLiteDatabase {
+        // Ownership is settled before anything writes, so a file this app did not make is never changed.
+        try checkOwnership(url)
+        let db = try SQLiteDatabase(path: url.path, noFollow: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        // Schema and marker come before WAL: a new index has them in its main file from the start, so any
+        // other connection that reads the file recognizes it.
+        let marked = try db.transaction { () -> Bool in
+            try db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            let current = try db.queryRow("SELECT value FROM meta WHERE key = 'schema_version'") { $0.text(0) }
+            let rebuilt = current != schemaVersion
+            if rebuilt {
+                // Rebuilt rather than migrated, in one transaction so another process never sees half of it.
+                try db.execute(
+                    """
+                    DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS calls; DROP TABLE IF EXISTS occurrences;
+                    DROP TABLE IF EXISTS marks; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS read_stats;
+                    CREATE TABLE files(
+                        id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, session_id TEXT NOT NULL,
+                        agent_id TEXT, inode INTEGER NOT NULL, birthtime REAL NOT NULL, size INTEGER NOT NULL DEFAULT 0,
+                        offset INTEGER NOT NULL DEFAULT 0, next_seq INTEGER NOT NULL DEFAULT 0,
+                        head_length INTEGER NOT NULL DEFAULT 0, head_hash INTEGER NOT NULL DEFAULT 0,
+                        lines_read INTEGER NOT NULL DEFAULT 0, candidate_lines INTEGER NOT NULL DEFAULT 0,
+                        parse_failures INTEGER NOT NULL DEFAULT 0);
+                    CREATE TABLE occurrences(
+                        file_id INTEGER NOT NULL, message_id TEXT NOT NULL, seq INTEGER NOT NULL, line_session_id TEXT,
+                        ts REAL NOT NULL, model TEXT NOT NULL, version TEXT, input_tokens INTEGER NOT NULL,
+                        output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+                        cache_write_tokens INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL,
+                        cache_write_5m INTEGER NOT NULL, ttl TEXT, iterations TEXT, PRIMARY KEY(file_id, message_id));
+                    CREATE INDEX occurrences_message ON occurrences(message_id);
+                    CREATE TABLE calls(
+                        message_id TEXT PRIMARY KEY, owner_file_id INTEGER NOT NULL, ts REAL NOT NULL,
+                        input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
+                        cache_write_tokens INTEGER NOT NULL);
+                    CREATE INDEX calls_ts ON calls(ts);
+                    CREATE TABLE marks(file_id INTEGER NOT NULL, seq INTEGER NOT NULL, ts REAL, PRIMARY KEY(file_id, seq));
+                    CREATE TABLE titles(
+                        id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, seq INTEGER NOT NULL, session_id TEXT NOT NULL,
+                        title TEXT NOT NULL);
+                    CREATE INDEX titles_session ON titles(session_id);
+                    CREATE TABLE read_stats(
+                        file_id INTEGER NOT NULL, day INTEGER NOT NULL, assistant_lines INTEGER NOT NULL DEFAULT 0,
+                        assistant_without_call INTEGER NOT NULL DEFAULT 0, lines_appended INTEGER NOT NULL DEFAULT 0,
+                        calls_appended INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(file_id, day));
+                    """)
+                try db.run(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", [.text(schemaVersion)])
+            }
+            let marker = try db.queryRow("PRAGMA application_id") { $0.int(0) }
+            if marker != Int(applicationID) { try db.execute("PRAGMA application_id = \(applicationID)") }
+            return rebuilt || marker != Int(applicationID)
+        }
         try db.execute("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")
-        try db.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        let current = try db.queryRow("SELECT value FROM meta WHERE key = 'schema_version'") { $0.text(0) }
-        guard current != schemaVersion else { return db }
-        // The index is derived data: rebuild it rather than migrate.
-        try db.execute(
-            """
-            DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS calls; DROP TABLE IF EXISTS occurrences;
-            DROP TABLE IF EXISTS marks; DROP TABLE IF EXISTS titles; DROP TABLE IF EXISTS read_stats;
-            CREATE TABLE files(
-                id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, session_id TEXT NOT NULL,
-                agent_id TEXT, inode INTEGER NOT NULL, birthtime REAL NOT NULL, size INTEGER NOT NULL DEFAULT 0,
-                offset INTEGER NOT NULL DEFAULT 0, next_seq INTEGER NOT NULL DEFAULT 0,
-                head_length INTEGER NOT NULL DEFAULT 0, head_hash INTEGER NOT NULL DEFAULT 0,
-                lines_read INTEGER NOT NULL DEFAULT 0, candidate_lines INTEGER NOT NULL DEFAULT 0,
-                parse_failures INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE occurrences(
-                file_id INTEGER NOT NULL, message_id TEXT NOT NULL, seq INTEGER NOT NULL, line_session_id TEXT,
-                ts REAL NOT NULL, model TEXT NOT NULL, version TEXT, input_tokens INTEGER NOT NULL,
-                output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
-                cache_write_tokens INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL,
-                cache_write_5m INTEGER NOT NULL, ttl TEXT, iterations TEXT, PRIMARY KEY(file_id, message_id));
-            CREATE INDEX occurrences_message ON occurrences(message_id);
-            CREATE TABLE calls(
-                message_id TEXT PRIMARY KEY, owner_file_id INTEGER NOT NULL, ts REAL NOT NULL,
-                input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
-                cache_write_tokens INTEGER NOT NULL);
-            CREATE INDEX calls_ts ON calls(ts);
-            CREATE TABLE marks(file_id INTEGER NOT NULL, seq INTEGER NOT NULL, ts REAL, PRIMARY KEY(file_id, seq));
-            CREATE TABLE titles(
-                id INTEGER PRIMARY KEY, file_id INTEGER NOT NULL, seq INTEGER NOT NULL, session_id TEXT NOT NULL,
-                title TEXT NOT NULL);
-            CREATE INDEX titles_session ON titles(session_id);
-            CREATE TABLE read_stats(
-                file_id INTEGER NOT NULL, day INTEGER NOT NULL, assistant_lines INTEGER NOT NULL DEFAULT 0,
-                assistant_without_call INTEGER NOT NULL DEFAULT 0, lines_appended INTEGER NOT NULL DEFAULT 0,
-                calls_appended INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(file_id, day));
-            """)
-        try db.run("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', ?)", [.text(schemaVersion)])
+        // An index that was already in WAL mode got its marker in the WAL: copy it to the file if nobody is
+        // reading, without waiting for readers (an unmarked index is still recognized by its schema).
+        if marked { try db.execute("PRAGMA wal_checkpoint(PASSIVE)") }
         return db
+    }
+
+    /// The tables and columns only this app's index has, beside `meta.schema_version` = the current version.
+    private static let ownSchema: [String: Set<String>] = [
+        "meta": ["key", "value"],
+        "files": ["path", "kind", "session_id", "inode", "offset", "head_hash", "parse_failures"],
+        "calls": ["message_id", "owner_file_id", "cache_write_tokens"],
+        "occurrences": ["file_id", "message_id", "seq", "iterations"],
+        "read_stats": ["file_id", "day", "assistant_without_call", "calls_appended"],
+    ]
+
+    /// Throws `.notAnIndex` unless the path holds nothing (and no side files of some other database), an empty
+    /// file, a file marked as this app's index, or an unmarked file with this app's schema (an index made
+    /// before the marker existed). Only a regular file is opened, so a pipe never blocks.
+    private static func checkOwnership(_ url: URL) throws {
+        let sideFiles = ["-wal", "-shm", "-journal"].contains {
+            FileManager.default.fileExists(atPath: url.path + $0)
+        }
+        guard let type = fileType(url) else {
+            if sideFiles { throw IndexOpenError.notAnIndex(url.path) }
+            return
+        }
+        guard type == .typeRegular else { throw IndexOpenError.notAnIndex(url.path) }
+        guard let handle = FileHandle(forReadingAtPath: url.path) else { return }  // SQLite reports the reason
+        defer { try? handle.close() }
+        let header = try handle.read(upToCount: 100) ?? Data()
+        if header.isEmpty {
+            if sideFiles { throw IndexOpenError.notAnIndex(url.path) }
+            return
+        }
+        guard header.count == 100, header.starts(with: Data("SQLite format 3\u{0}".utf8)) else {
+            throw IndexOpenError.notAnIndex(url.path)
+        }
+        let marker = header.dropFirst(68).prefix(4).reduce(UInt32(0)) { $0 << 8 | UInt32($1) }
+        if marker == UInt32(bitPattern: applicationID) { return }
+        guard marker == 0, try hasOwnSchema(url) else { throw IndexOpenError.notAnIndex(url.path) }
+    }
+
+    /// Reads an unmarked file without locks or side files, so another app's database is not touched.
+    private static func hasOwnSchema(_ url: URL) throws -> Bool {
+        let probe = try SQLiteDatabase(immutableSnapshotOf: url)
+        for (table, columns) in ownSchema {
+            var found = Set<String>()
+            try probe.query("SELECT name FROM pragma_table_info(?)", [.text(table)]) { found.insert($0.text(0)) }
+            guard columns.isSubset(of: found) else { return false }
+        }
+        return try probe.queryRow("SELECT value FROM meta WHERE key = 'schema_version'") { $0.text(0) }
+            == schemaVersion
     }
 
     private func fileRow(path: String) throws -> FileRow? {

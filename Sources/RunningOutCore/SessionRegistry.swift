@@ -51,11 +51,24 @@ public struct SessionRegistry {
 
     public init(
         directory: URL, isAlive: @escaping (Int32, Double?) -> Bool = ProcessProbe.isAlive,
-        read: @escaping (URL) throws -> Data = { try Data(contentsOf: $0) }
+        read: @escaping (URL) throws -> Data = SessionRegistry.readRegularFile
     ) {
         self.directory = directory
         self.isAlive = isAlive
         self.read = read
+    }
+
+    /// Reads a session file without following links and without blocking, and only if it is a regular file of
+    /// modest size: a link from a session-shaped name to a key file, or a pipe, is never read (BR-R3).
+    public static func readRegularFile(_ url: URL) throws -> Data {
+        let descriptor = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size <= 1 << 20 else {
+            throw POSIXError(.EINVAL)
+        }
+        return try handle.readToEnd() ?? Data()
     }
 
     public static func defaultDirectory(home: URL) -> URL {
@@ -74,7 +87,9 @@ public struct SessionRegistry {
         var candidates = 0
         var sessions: [RunningSession] = []
         for name in names {
-            guard name.hasSuffix(".json"), let pid = Int32(name.dropLast(".json".count)), pid > 0 else { continue }
+            let stem = name.hasSuffix(".json") ? name.dropLast(".json".count) : ""
+            guard !stem.isEmpty, stem.allSatisfy({ $0.isASCII && $0.isNumber }), let pid = Int32(stem), pid > 0
+            else { continue }
             candidates += 1
             guard let data = try? read(directory.appendingPathComponent(name)), let session = parse(data, pid: pid)
             else { continue }

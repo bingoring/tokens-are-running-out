@@ -65,6 +65,23 @@ struct CLIParserTests {
         #expect(exitCode("index --root /r --db /rr/index.sqlite") == nil)
     }
 
+    // R-1: the rule compared spellings, and APFS ignores case.
+    @Test("an index path inside ~/.claude is refused in any letter case")
+    func databaseInsideClaudeAnyCase() {
+        #expect(exitCode("index --db /Users/someone/.CLAUDE/index.sqlite") == 2)
+        #expect(exitCode("index --root /r --db /R/sub/index.sqlite") == 2)
+    }
+
+    // R-1: `Int("+60000")` accepted a sign, and a date that does not exist rolled over into the next month.
+    @Test("a threshold is plain digits and a date must exist")
+    func strictArguments() {
+        let window = "--root /r --db /d.sqlite --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z"
+        #expect(exitCode("report \(window) --rebuild-threshold +60000") == 2)
+        #expect(exitCode("report \(window) --rebuild-threshold ６００００") == 2)
+        #expect(exitCode("report --root /r --db /d.sqlite --from 2026-02-30T00:00:00Z --to 2026-03-05T00:00:00Z") == 2)
+        #expect(exitCode("stats --root /r --db /d.sqlite --from 2026-11-10T24:00:00Z --to 2026-11-17T00:00:00Z") == 2)
+    }
+
     @Test("report takes a window like stats")
     func report() throws {
         let command = try parse("report --root /r --db /d.sqlite --from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z")

@@ -479,7 +479,8 @@ struct IndexerTests {
         let dir = try TempDir()
         try dir.write(
             Fixture.title("Refactor parser", session: "s1")
-                + Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", write: 80_000, ttl: "1h")
+                // The earlier call's five-minute TTL, not the one-hour default, carries over to m2.
+                + Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", write: 80_000, ttl: "5m")
                 + Fixture.call(id: "m2", at: "2026-11-10T00:10:00Z", session: "s1", output: 5, read: 80_000)
                 + Fixture.call(
                     id: "m2", at: "2026-11-10T00:10:00Z", session: "s1", input: 3, output: 900, read: 80_000,
@@ -489,7 +490,7 @@ struct IndexerTests {
         try indexer.indexAll()
         let last = try #require(try indexer.lastCall(ofSession: "s1"))
         #expect(last.timestamp == nov10 + 600)
-        #expect(last.ttl == .oneHour)
+        #expect(last.ttl == .fiveMinutes)
         #expect(last.contextTokens == 3 + 80_000 + 2_000)
         #expect(last.title == "Refactor parser")
         #expect(try indexer.lastCall(ofSession: "missing") == nil)

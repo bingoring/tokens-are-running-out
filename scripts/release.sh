@@ -62,7 +62,7 @@ if [ "$dry_run" = 0 ]; then
     output=$(xcrun notarytool submit "$out/submit.zip" --key "$key" --key-id "$key_id" --issuer "$issuer" \
         --wait --timeout 30m --output-format json 2>&1) || true
     json=$(printf '%s\n' "$output" | grep '^{' | tail -n 1)
-    field() { printf '%s' "$json" | python3 -c "import json, sys; print(json.load(sys.stdin).get('$1', ''))" 2>/dev/null || true; }
+    field() { printf '%s' "$json" | python3 -I -c "import json, sys; print(json.load(sys.stdin).get('$1', ''))" 2>/dev/null || true; }
     status=$(field status)
     id=$(field id)
     echo "notarization: ${status:-no status}${id:+, submission $id}"
@@ -90,6 +90,20 @@ if [ "$dry_run" = 0 ]; then
 fi
 
 ditto -c -k --keepParent "$app" "$out/$asset"
+
+# Check the zip that ships, not only the app it was made from: unpack it with ditto, as Archive Utility
+# does, and verify the signature and, after notarization, the stapled ticket again.
+unpacked=$(mktemp -d)
+trap 'rm -rf "$unpacked"' EXIT
+ditto -x -k "$out/$asset" "$unpacked"
+codesign --verify --strict --deep "$unpacked/$(basename "$app")" || fail "the signature in $asset does not verify"
+if [ "$dry_run" = 0 ]; then
+    xcrun stapler validate -q "$unpacked/$(basename "$app")" || fail "the ticket in $asset does not validate"
+    echo "verified $asset: signature and stapled ticket"
+else
+    echo "verified $asset: signature (dry run, not notarized)"
+fi
+
 (cd "$out" && shasum -a 256 "$asset" >"$asset.sha256")
 echo "packaged $out/$asset"
 cat "$out/$asset.sha256"

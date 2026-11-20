@@ -170,13 +170,16 @@ struct ReviewRegressionTests {
     }
 
     // MEDIUM: a corrupt index made every start fail.
+    // R-1: only the app's own index location is rebuilt; elsewhere the file is left alone (IndexOwnershipTests).
     @Test("a corrupt index file is rebuilt")
     func corruptIndexRebuilt() throws {
         let dir = try TempDir()
         try dir.write(Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z"), to: "projects/-p/s1.jsonl")
         try dir.write(String(repeating: "not a database ", count: 400), to: "index.sqlite")
 
-        let indexer = try makeIndexer(dir)
+        let indexer = try Indexer(
+            root: dir.url.appendingPathComponent("projects"),
+            databaseURL: dir.url.appendingPathComponent("index.sqlite"), opening: .replaceUnusable)
         try indexer.indexAll()
 
         #expect(try all(indexer).calls == 1)

@@ -14,6 +14,11 @@ Rules (design doc sections 6.1-6.4, with the 2-2 corrections in DECISIONS.md):
     in that file holds the final usage (Claude Code fills the usage in as the response streams)
   * `usage.iterations` splits a call into steps; an `advisor_message` step runs on its own model
     and is left out of the top-level input and output, so cost is the sum over the steps
+  * a call with more than 1,000 steps or a token count outside 0..1e9 is malformed and skipped
+  * odd shapes are read as the app reads them: a line, message or usage that is not an object, a
+    non-string id, model or timestamp, or a count that is not an integer (7.0) means no call; steps of
+    another shape mean the top-level usage; a step whose model is not a string is dropped; only the
+    known keys of a cache breakdown are read
   * a step is a rebuild when it writes >= the threshold (default 50,000, --rebuild-threshold) cache
     tokens and more than it read; a call is a rebuild when one of its main-model steps is (advisor
     steps never are)
@@ -41,6 +46,7 @@ import re
 
 THRESHOLD = 50_000
 TOKEN_LIMIT = 1_000_000_000
+ITERATION_LIMIT = 1_000
 DEFAULT_MODEL = "claude-opus-5-5"
 PRICING_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "Sources", "RunningOutCore", "Resources", "pricing.json"
@@ -48,11 +54,36 @@ PRICING_PATH = os.path.join(
 TTL = {"1h": 3600, "5m": 300}
 SHORT_BREAK_HOURS = 3  # expired after a gap of at most this long: avoidable by resuming in time
 TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+# Only these keys of a cache breakdown are read; others, of any value, are ignored like the app does.
+CACHE_KEYS = ("ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens")
 DATED = re.compile(r"^(.*)-\d{8}$")
+TIMESTAMP = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2}(?::\d{2})?)?")
 
 
 def iso(ts):
     return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+
+
+def line_time(ts):
+    """Seconds since 1970 of a line's timestamp, or None when it is not one the prototype reads.
+
+    The fraction may have 1 to 9 digits, as in the app, and reads the same on every Python version
+    (3.9's fromisoformat takes only 3 or 6). Without a time zone the time is local, which the app does
+    not accept (a known difference).
+    """
+    match = TIMESTAMP.fullmatch(ts) if isinstance(ts, str) else None
+    if match is None:
+        return None
+    whole, fraction, zone = match.groups()
+    try:
+        seconds = datetime.datetime.fromisoformat(whole + (zone or "").replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+    return (int(seconds) * 10**9 + int((fraction or "").ljust(9, "0"))) / 10**9
+
+
+def text_or_none(v):
+    return v if isinstance(v, str) else None
 
 
 def ttl_of(usage, fallback):
@@ -84,16 +115,20 @@ def steps_of(usage):
         c = i.get("cache_creation")
         if c is not None and not isinstance(c, dict):
             return None
-        values = [i.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in c] if c else [])
+        values = [i.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in CACHE_KEYS] if c else [])
         if any(v is not None and not is_count(v) for v in values):
             return None
     return its
 
 
 def parts(model, usage):
-    """(kind, model, step) per step; the top-level usage is one step when there are no iterations."""
-    its = steps_of(usage)
-    if its is None:
+    """(kind, model, step) per step; the top-level usage is one step when there are no iterations.
+
+    A step whose model is not a string is dropped, and the top-level usage is used when no step is left.
+    A missing or empty model is the call's model; a type other than "advisor_message" is a main step.
+    """
+    its = [i for i in steps_of(usage) or [] if i.get("model") is None or isinstance(i.get("model"), str)]
+    if not its:
         return [("message", model, usage)]
     return [
         ("advisor" if i.get("type") == "advisor_message" else "message", i.get("model") or model, i) for i in its
@@ -177,23 +212,35 @@ def iter_calls(path):
                 o = json.loads(line)
             except ValueError:
                 continue
+            # A line of another shape is not a call, like in the app: skip it rather than fail.
+            if not isinstance(o, dict):
+                continue
             # The words can also appear inside message text, so check the record itself.
             if o.get("type") == "system" and o.get("subtype") == "compact_boundary":
                 yield None, None, {"compact": True}
                 continue
-            if o.get("type") != "assistant" or not o.get("timestamp"):
+            if o.get("type") != "assistant" or line_time(o.get("timestamp")) is None:
                 continue
-            m = o.get("message") or {}
-            u = m.get("usage") or {}
-            if not u or not m.get("id") or not m.get("model") or m.get("model") == "<synthetic>":
+            m = o.get("message")
+            u = m.get("usage") if isinstance(m, dict) else None
+            if not isinstance(u, dict) or not u:
+                continue
+            mid, model = m.get("id"), m.get("model")
+            if not isinstance(mid, str) or not mid or not isinstance(model, str) or not model:
+                continue
+            if model == "<synthetic>":
                 continue
             c = u.get("cache_creation")
             if c is not None and not isinstance(c, dict):
                 continue
-            top = [u.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in c] if c else [])
+            top = [u.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in CACHE_KEYS] if c else [])
             if any(v is not None and not is_count(v) for v in top):
                 continue
-            # A count outside 0..1e9 is not real usage: the line is malformed and skipped.
+            # More than 1,000 steps or a count outside 0..1e9 is not real usage: the line is malformed and
+            # skipped. Together they keep one call's cost far inside the app's Int64 sums.
+            its = steps_of(u)
+            if its is not None and len(its) > ITERATION_LIMIT:
+                continue
             values = counts(u) + [v for _, _, s in parts(m["model"], u) for v in counts(s)]
             if any(v < 0 or v > TOKEN_LIMIT for v in values):
                 continue
@@ -285,7 +332,7 @@ def main():
             m, o = event
             mid = m["id"]
             u = final[mid]
-            t = iso(o["timestamp"])
+            t = line_time(o["timestamp"])
             steps = parts(m["model"], u)
             is_rebuild = any(rebuilt(kind, step, a.rebuild_threshold) for kind, _, step in steps)
 
@@ -341,7 +388,7 @@ def main():
                         cause = "model changed"
                     elif t - last_t > TTL[last_ttl]:
                         cause = "expired"
-                    elif o.get("version") != last_version:
+                    elif text_or_none(o.get("version")) != last_version:
                         cause = "version changed"
                     else:
                         cause = "unknown"
@@ -360,7 +407,7 @@ def main():
 
             last_t = t
             last_model = m.get("model")
-            last_version = o.get("version")
+            last_version = text_or_none(o.get("version"))
             last_ttl = ttl_of(u, last_ttl)
             compacted = False
 

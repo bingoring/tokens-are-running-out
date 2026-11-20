@@ -40,6 +40,29 @@ struct SessionRegistryTests {
         #expect(opened == ["101.json"])
     }
 
+    // R-1: a session-shaped name that is a link to a key file, or a pipe, was opened anyway.
+    @Test("a session name that is a link, a pipe or not plain digits is never opened")
+    func onlyPlainSessionFiles() throws {
+        let dir = try TempDir()
+        let sessions = dir.url.appendingPathComponent("sessions")
+        try dir.write(session(pid: 101, id: "s1"), to: "sessions/101.json")
+        // A key file that happens to hold session-shaped JSON: if the link were followed, s2 would appear.
+        try dir.write(session(pid: 102, id: "s2"), to: "sessions/102.0123abcd.key")
+        try FileManager.default.createSymbolicLink(
+            at: sessions.appendingPathComponent("102.json"),
+            withDestinationURL: sessions.appendingPathComponent("102.0123abcd.key"))
+        #expect(mkfifo(sessions.appendingPathComponent("103.json").path, 0o600) == 0)
+        try dir.write(session(pid: 12, id: "s4"), to: "sessions/+12.json")
+
+        // Default reader, as in the app: a pipe would block it forever.
+        let registry = SessionRegistry(directory: sessions, isAlive: { _, _ in true })
+        guard case .available(let found) = registry.load() else {
+            Issue.record("expected available")
+            return
+        }
+        #expect(found.map(\.sessionID) == ["s1"])
+    }
+
     @Test("a session file becomes a running session with its status, name and times")
     func parsesSession() throws {
         let dir = try TempDir()

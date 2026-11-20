@@ -16,9 +16,11 @@ permissions:
 jobs:
   update-tap:
     if: github.repository == 'bingoring/tokens-are-running-out'
+    # TAP_TOKEN lives in the release environment, which waits for a required reviewer. Run it from main.
+    environment: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -28,17 +30,36 @@ jobs:
           TAG: ${{ inputs.tag }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          # The whole input must be vMAJOR.MINOR.PATCH: numbers without leading zeros, and nothing else (no
+          # space or newline, no suffix).
+          bad() {
             echo "::error::Tag must look like v1.2.3; pre-releases do not change the cask"
             exit 1
-          fi
+          }
+          case "$TAG" in
+            v*) ;;
+            *) bad ;;
+          esac
           version="${TAG#v}"
+          case "$version" in
+            "" | *[!0-9.]* | .* | *.) bad ;;
+          esac
+          IFS=.
+          set -- $version # digits and dots only, split on the dots
+          unset IFS
+          [ $# -eq 3 ] || bad
+          for part in "$@"; do
+            case "$part" in
+              "" | 0?*) bad ;;
+            esac
+          done
           asset="TokensAreRunningOut-$version.zip"
           gh release download "$TAG" --pattern "$asset" --pattern "$asset.sha256" --dir "$RUNNER_TEMP/release"
           (cd "$RUNNER_TEMP/release" && shasum -a 256 -c "$asset.sha256")
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "sha256=$(cut -d ' ' -f 1 "$RUNNER_TEMP/release/$asset.sha256")" >> "$GITHUB_OUTPUT"
 
+      # No --only-newer: this workflow is also how to move the cask back to an earlier release.
       - name: Point the cask at it
         env:
           VERSION: ${{ steps.release.outputs.version }}
