@@ -12,7 +12,7 @@ jobs:
   build-test-lint:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -20,6 +20,9 @@ jobs:
         run: |
           xcodebuild -version
           swift --version
+
+      - name: Anti-goals in the source (no network, writes only the index, no real transcripts)
+        run: python3 -I scripts/check-anti-goals.py
 
       - name: Build app and tests (warnings are errors)
         run: swift build --build-tests -Xswiftc -warnings-as-errors
@@ -46,7 +49,7 @@ jobs:
           done
 
       - name: Keep the screenshots for review
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-snapshots
           path: ${{ runner.temp }}/snapshots
@@ -56,37 +59,30 @@ jobs:
           scripts/build-app.sh --release 0.0.0
           scripts/release.sh --version 0.0.0 --dry-run
 
+      - name: No network symbols or frameworks in either slice, no entitlements
+        run: scripts/check-binary.sh .build/apps/TokensAreRunningOut.app
+
       - name: Embedded price table is current
         run: |
           python3 -I scripts/embed-pricing.py
           git diff --exit-code Sources/RunningOutCore/PricingData.swift
 
-      - name: No network APIs in the app (anti-goal)
-        run: |
-          if grep -rnE 'URLSession|NSURLConnection|CFNetwork|import Network|socket\(|contentsOf: *URL\(string' Sources; then
-            echo "Network APIs are not allowed in Sources/." >&2
-            exit 1
-          fi
-
-      - name: Transcripts are only read (rule R9)
-        run: |
-          if grep -rnE 'forWritingTo|forWritingAtPath|forUpdating|\.write\(to|createFile\(|removeItem\(|createDirectory\(|moveItem\(|copyItem\(|replaceItem|fopen\(|O_WRONLY|O_RDWR|O_CREAT' Sources \
-              | grep -v 'Indexer.swift:.*database\(URL\|Folder\)'; then
-            echo "Sources/ may only write the index database." >&2
-            exit 1
-          fi
-
-      - name: No real transcripts or indexes committed
-        run: |
-          if git ls-files | grep -E '\.(jsonl|sqlite)$'; then
-            echo "Real transcripts or index files must not be committed." >&2
-            exit 1
-          fi
-
       - name: No merge commits from the base (rebase only)
         if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          merges=$(git log --merges --oneline "origin/${{ github.base_ref }}..HEAD^2" 2>/dev/null || true)
+          # A pull_request run checks out refs/pull/N/merge: GitHub's merge of the PR head (HEAD^2) into the
+          # base (HEAD^1). If that ever stops being true, fail rather than skip the check.
+          if ! git rev-parse --verify --quiet "HEAD^2^{commit}" > /dev/null; then
+            echo "::error::HEAD is not the PR merge commit, so the PR head (HEAD^2) cannot be found"
+            exit 1
+          fi
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/$BASE_REF^{commit}" > /dev/null; then
+            echo "::error::The base branch origin/$BASE_REF was not fetched"
+            exit 1
+          fi
+          merges=$(git log --merges --oneline "refs/remotes/origin/$BASE_REF..HEAD^2")
           if [ -n "$merges" ]; then
             echo "$merges"
             echo "Rebase on the base branch instead of merging it in." >&2
