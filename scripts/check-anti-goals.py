@@ -143,7 +143,7 @@ for path in tracked:
         report(path, "transcript-like file outside fixtures", "only " + FIXTURES + " may hold .jsonl names")
 
 if violations:
-    print("\n".join(violations))
+    print("\n".join(violations), flush=True)
     print("check-anti-goals: {} violation(s)".format(len(violations)), file=sys.stderr)
     sys.exit(1)
 print("check-anti-goals: ok ({} source files, {} tracked files)".format(len(sources), len(tracked)))
