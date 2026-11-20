@@ -13,7 +13,7 @@ struct UsageAnalyzerTests {
     private func makeReport() throws -> UsageReport {
         let dir = try TempDir()
         try dir.write(
-            Fixture.title("결제 화면 개편", session: "s1")
+            Fixture.title("가상 세션 제목", session: "s1")
                 // session start: write 60,000 -> 480,000,000
                 + Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 0, output: 0, write: 60_000)
                 // normal: 100 x 8000 + 60,000 x 200 = 12,800,000
@@ -87,7 +87,7 @@ struct UsageAnalyzerTests {
         #expect(report.rebuilds.map(\.messageID) == ["m1", "m3", "m4"])
         let expired = try #require(report.rebuilds.first { $0.messageID == "m3" })
         #expect(expired.cause == .expiredShortBreak)
-        #expect(expired.title == "결제 화면 개편")
+        #expect(expired.title == "가상 세션 제목")
         #expect(expired.sessionID == "s1")
         #expect(expired.gapSeconds == 3_601)
         #expect(expired.previousTimestamp == nov10 + 100)

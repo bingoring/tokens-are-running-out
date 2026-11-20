@@ -139,8 +139,8 @@ struct RecordParserTests {
 
     @Test("a custom title record becomes a title")
     func title() {
-        let line = #"{"type":"custom-title","customTitle":"결제 화면 개편","sessionId":"s-1"}"#
-        #expect(parse(line) == .title(sessionID: "s-1", title: "결제 화면 개편"))
+        let line = #"{"type":"custom-title","customTitle":"가상 세션 제목","sessionId":"s-1"}"#
+        #expect(parse(line) == .title(sessionID: "s-1", title: "가상 세션 제목"))
     }
 
     @Test("ordinary lines are not candidates")
