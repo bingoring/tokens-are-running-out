@@ -20,6 +20,8 @@ build/
 # Local data: never commit real Claude Code transcripts or indexes
 *.jsonl
 *.sqlite
+*.sqlite-*
+*.db
 .local/
 
 # Python
