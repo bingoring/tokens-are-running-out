@@ -19,6 +19,9 @@ jobs:
   release:
     # Forks have no signing secrets.
     if: github.repository == 'bingoring/tokens-are-running-out'
+    # The secrets live only in this environment, which waits for a required reviewer and accepts only v* tags
+    # (and main, for the Update Homebrew tap workflow).
+    environment: release
     runs-on: macos-latest
     timeout-minutes: 60
     env:
