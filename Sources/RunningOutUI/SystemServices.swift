@@ -37,6 +37,19 @@ public enum LoginItemStatus: Sendable, Equatable {
     case unavailable
 }
 
+extension LoginItemStatus {
+    init(_ status: SMAppService.Status) {
+        switch status {
+        case .enabled: self = .enabled
+        case .requiresApproval: self = .requiresApproval
+        // `.notFound` is what a fresh install reads until its first `register()`: Background Task Management has no
+        // record of the app yet. It is off, not unavailable, or the user could never turn it on.
+        case .notRegistered, .notFound: self = .disabled
+        @unknown default: self = .unavailable
+        }
+    }
+}
+
 @MainActor public protocol LoginItemControlling: AnyObject {
     var status: LoginItemStatus { get }
     func setEnabled(_ enabled: Bool) throws
@@ -115,15 +128,7 @@ public final class UserNotificationScheduler: NSObject, NotificationScheduling, 
 public final class MainAppLoginItem: LoginItemControlling {
     public init() {}
 
-    public var status: LoginItemStatus {
-        switch SMAppService.mainApp.status {
-        case .enabled: return .enabled
-        case .notRegistered: return .disabled
-        case .requiresApproval: return .requiresApproval
-        case .notFound: return .unavailable
-        @unknown default: return .unavailable
-        }
-    }
+    public var status: LoginItemStatus { LoginItemStatus(SMAppService.mainApp.status) }
 
     public func setEnabled(_ enabled: Bool) throws {
         if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
