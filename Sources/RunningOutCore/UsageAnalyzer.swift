@@ -298,7 +298,17 @@ public enum ReportText {
     }
 
     /// Python `{:,}`.
-    static func count(_ value: Int) -> String { grouped(String(value)) }
+    public static func count(_ value: Int) -> String { grouped(String(value)) }
+
+    /// The tokens line of `report` and `stats`. The prototype prints no values when there were no calls.
+    public static func tokensLine(calls: Int, input: Int, output: Int, cacheRead: Int, cacheWrite: Int) -> String {
+        let values =
+            calls == 0
+            ? ""
+            : "input=\(count(input)) output=\(count(output)) cache_read=\(count(cacheRead)) "
+                + "cache_write=\(count(cacheWrite))"
+        return "tokens              " + values
+    }
 
     private static func grouped(_ digits: String) -> String {
         var result = ""
@@ -329,12 +339,10 @@ public enum ReportText {
         var lines: [String] = []
         lines.append("window              \(fromText) .. \(toText)")
         lines.append("api calls           \(count(report.calls))")
-        let tokens =
-            report.calls == 0
-            ? ""
-            : "input=\(count(report.inputTokens)) output=\(count(report.outputTokens)) "
-                + "cache_read=\(count(report.cacheReadTokens)) cache_write=\(count(report.cacheWriteTokens))"
-        lines.append("tokens              " + tokens)
+        lines.append(
+            tokensLine(
+                calls: report.calls, input: report.inputTokens, output: report.outputTokens,
+                cacheRead: report.cacheReadTokens, cacheWrite: report.cacheWriteTokens))
         let rebuildShare =
             report.cacheWriteTokens == 0 ? 0 : Double(report.rebuildTokens) / Double(report.cacheWriteTokens)
         lines.append(
