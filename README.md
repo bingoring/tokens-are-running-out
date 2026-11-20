@@ -6,6 +6,13 @@ A macOS menu bar app that tells you **why** your Claude Code usage drained, not 
 
 Most usage tools show a gauge. This one reads your local Claude Code transcripts and explains where the spend came from, so you can change what you do next time.
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/popover-dark.png">
+    <img src="docs/images/popover-light.png" width="360" alt="The popover: sessions whose cache expires soon, today's cost split by cause, and the most expensive cache rebuilds. Every value in this image is made up.">
+  </picture>
+</p>
+
 > **Status: pre-release.** Signed and notarized builds go to [Releases](https://github.com/bingoring/tokens-are-running-out/releases), and Homebrew works from the first stable release, v0.1.0. The design and its approval gates live in [`docs/dlc/projects/tokens-are-running-out`](docs/dlc/projects/tokens-are-running-out/STATUS.md) ([Waypoint](https://github.com/bingoring/waypoint)).
 
 ## What it does
@@ -23,7 +30,7 @@ Most usage tools show a gauge. This one reads your local Claude Code transcripts
 
 ## Install
 
-Requires macOS 14 or later, on Apple silicon or Intel.
+Requires macOS 14 or later, on Apple silicon or Intel. So far it has been tested only on macOS 27 on Apple silicon. If you run it on an Intel Mac or on macOS 14 to 26, please [open an issue](https://github.com/bingoring/tokens-are-running-out/issues/new/choose) and say how it went.
 
 With [Homebrew](https://brew.sh):
 
