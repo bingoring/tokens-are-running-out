@@ -157,7 +157,8 @@ public final class AppModel {
     private func indexAll() async {
         guard let service else { return }
         do {
-            _ = try await service.indexAll { progress in
+            // Weak in the outer closure too: the inner capture alone would still hold the model strongly.
+            _ = try await service.indexAll { [weak self] progress in
                 guard progress.isInitial else { return }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
