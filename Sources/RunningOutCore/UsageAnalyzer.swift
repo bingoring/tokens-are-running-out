@@ -170,26 +170,26 @@ public final class UsageAnalyzer {
                 var advisorCost = 0
                 var unpriced = Set<String>()
                 var consulted = false
-                // One call stays far inside Int64 (`RecordParser.tokenLimit` and `iterationLimit`), so its own sums
-                // use `+`. Sums over calls saturate (`|+=`): only input worth over about 9.2 billion USD reaches
-                // the limit, where the prototype's exact integers and this report part ways.
+                // Every sum saturates (`|+=`). New lines keep one call far inside Int64 (`RecordParser.tokenLimit`
+                // and `iterationLimit`), but rows an older build indexed are not checked again. Only input worth
+                // over about 9.2 billion USD reaches the limit, where the prototype's exact integers part ways.
                 for part in call.parts {
                     let model = part.model ?? call.model
                     let partCost = prices.cost(of: part, model: model)
                     if !partCost.known { unpriced.insert(model) }
-                    cost.cacheWrite += partCost.cacheWrite
-                    cost.other += partCost.other
+                    cost.cacheWrite |+= partCost.cacheWrite
+                    cost.other |+= partCost.other
                     if part.kind == .advisor {
                         consulted = true
                         report.advisor.inputTokens |+= part.inputTokens
                         report.advisor.outputTokens |+= part.outputTokens
                         report.advisor.cost |+= partCost.total
-                        advisorCost += partCost.total
+                        advisorCost |+= partCost.total
                     }
                     if item.isRebuild, RebuildClassifier.isRebuild(part, threshold: rebuildThreshold) {
-                        rebuilt.cost += partCost.cacheWrite
-                        rebuilt.tokens += part.cacheWriteTokens
-                        rebuilt.asRead += partCost.writtenAsRead
+                        rebuilt.cost |+= partCost.cacheWrite
+                        rebuilt.tokens |+= part.cacheWriteTokens
+                        rebuilt.asRead |+= partCost.writtenAsRead
                     }
                 }
                 if consulted { report.advisor.calls += 1 }

@@ -299,6 +299,27 @@ struct UsageAnalyzerTests {
         #expect(report.totalCost == 0)
     }
 
+    @Test("one call's own cost sums saturate too, for rows an older build indexed without the step limit")
+    func callCostSaturates() throws {
+        let dir = try TempDir()
+        // Three steps of 1e9 input at 4e9 thousandths of a USD per million tokens: 4e18 each, 1.2e19 together.
+        let step = Fixture.iteration(input: 1_000_000_000)
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 1_000_000_000, output: 0,
+                iterations: [step, step, step]),
+            to: "projects/-p/s1.jsonl")
+        let indexer = try Indexer(
+            root: dir.url.appendingPathComponent("projects"),
+            databaseURL: dir.url.appendingPathComponent("index.sqlite"))
+        try indexer.indexAll()
+        let expensive = Prices(input: 4_000_000_000, cacheWrite5m: 0, cacheWrite1h: 0, cacheRead: 0, output: 0)
+        let prices = PriceTable(models: [PriceTable.fallbackModel: ModelPricing(base: expensive, longContext: nil)])
+        let report = try UsageAnalyzer(indexer: indexer, prices: prices).report(from: nov10, to: nov10 + 86_400)
+        #expect(report.totalCost == Int.max)
+        #expect(report.bucketCosts[.normalWork] == Int.max)
+    }
+
     @Test("the menu bar share stays defined when both break costs are at the maximum")
     func idleShareSaturates() {
         var report = UsageReport(from: 0, to: 1)

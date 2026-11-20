@@ -36,7 +36,8 @@ public struct CallCost: Sendable, Equatable {
     public var writtenAsRead: Int
     /// False when the model was missing from the table and priced as the fallback.
     public var known: Bool
-    public var total: Int { cacheWrite + other }
+    /// Held at `Int.max` instead of trapping, like the report's sums.
+    public var total: Int { cacheWrite |+ other }
 }
 
 public struct PriceTableError: Error, CustomStringConvertible {
@@ -92,8 +93,8 @@ public struct PriceTable: Sendable {
         call.parts.reduce(CallCost(cacheWrite: 0, other: 0, writtenAsRead: 0, known: true)) { sum, part in
             let cost = cost(of: part, model: part.model ?? call.model)
             return CallCost(
-                cacheWrite: sum.cacheWrite + cost.cacheWrite, other: sum.other + cost.other,
-                writtenAsRead: sum.writtenAsRead + cost.writtenAsRead, known: sum.known && cost.known)
+                cacheWrite: sum.cacheWrite |+ cost.cacheWrite, other: sum.other |+ cost.other,
+                writtenAsRead: sum.writtenAsRead |+ cost.writtenAsRead, known: sum.known && cost.known)
         }
     }
 
