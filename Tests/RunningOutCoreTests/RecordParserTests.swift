@@ -252,4 +252,130 @@ struct RecordParserTests {
         #expect(parse(#"{"type":"user","message":{"role":"user","content":"ask the \"assistant\""}}"#) == .notCandidate)
         #expect(parse(#"{"type":"user","message":{"role":"assistant","content":"hi"}}"#) == .rejected)
     }
+
+    // MARK: - The prototype's reading of odd shapes (R-1)
+
+    /// A call with a main step, an advisor step and a second main step; `edit` rewrites one part of its JSON.
+    private func threeSteps(_ edit: (String) -> String = { $0 }) -> String {
+        edit(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", input: 3, output: 30, read: 60_000, write: 200,
+                iterations: [
+                    Fixture.iteration(input: 2, output: 10, read: 60_000, write: 100),
+                    Fixture.iteration(type: "advisor_message", model: "claude-fable-5-2", input: 40_000, output: 500),
+                    Fixture.iteration(input: 1, output: 20, read: 60_000, write: 100),
+                ]))
+    }
+
+    private let advisorStep = UsagePart(
+        kind: .advisor, model: "claude-fable-5-2", inputTokens: 40_000, outputTokens: 500)
+    private let firstStep = UsagePart(
+        inputTokens: 2, outputTokens: 10, cacheReadTokens: 60_000, cacheWriteTokens: 100, cacheWrite1h: 100)
+    private let lastStep = UsagePart(
+        inputTokens: 1, outputTokens: 20, cacheReadTokens: 60_000, cacheWriteTokens: 100, cacheWrite1h: 100)
+    private let topLevel = UsagePart(
+        inputTokens: 3, outputTokens: 30, cacheReadTokens: 60_000, cacheWriteTokens: 200, cacheWrite1h: 200)
+
+    private func parts(_ line: String) -> [UsagePart]? {
+        guard case .call(let call) = parse(line) else { return nil }
+        return call.parts
+    }
+
+    @Test("a top-level token count written as a fraction or with an exponent is not a count, so the line is no call")
+    func fractionalTopLevelCount() {
+        let line = Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", output: 10)
+        for written in ["7.0", "1e1", "70E-1", "0.0"] {
+            let odd = line.replacingOccurrences(of: #""output_tokens":10"#, with: #""output_tokens":\#(written)"#)
+            #expect(parse(odd) == .assistantWithoutCall(timestamp: 1_794_268_800), "output_tokens \(written)")
+        }
+        let breakdown = line.replacingOccurrences(
+            of: #""ephemeral_5m_input_tokens":0"#, with: #""ephemeral_5m_input_tokens":0.0"#)
+        #expect(parse(breakdown) == .assistantWithoutCall(timestamp: 1_794_268_800))
+    }
+
+    @Test("the fraction scan looks at numbers outside strings only")
+    func fractionScan() {
+        func scan(_ text: String) -> Bool { RecordParser.hasFractionalNumber(Data(text.utf8)) }
+        #expect(scan(#"{"a":7.0}"#))
+        #expect(scan(#"{"a":[1,-2e3]}"#))
+        #expect(!scan(#"{"a":7,"b":true,"c":false,"d":null,"e":-0}"#))
+        #expect(!scan(#"{"a":"7.0","b":"say \"1.5\" e"}"#))
+        #expect(scan(#"{"a":"\\","b":1.5}"#))
+    }
+
+    @Test("a fraction elsewhere in the line, in text or in another field, leaves the call as it is")
+    func fractionOutsideCounts() {
+        let line = Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", output: 10)
+            .replacingOccurrences(
+                of: #""usage":{"#, with: #""temperature":0.5,"content":"7.0e1","usage":{"speed":1.5,"#)
+        #expect(parts(line) == [UsagePart(inputTokens: 2, outputTokens: 10)])
+    }
+
+    @Test("a step count written as a fraction makes the steps unreadable, so the top-level usage is used")
+    func fractionalStepCount() {
+        let line = threeSteps {
+            $0.replacingOccurrences(of: #""input_tokens":40000"#, with: #""input_tokens":40000.0"#)
+        }
+        #expect(parts(line) == [topLevel])
+    }
+
+    @Test("over 1,000 steps whose shape is wrong fall back to the top-level usage instead of dropping the call")
+    func tooManyOddSteps() {
+        let steps =
+            Array(repeating: Fixture.iteration(input: 1, output: 1), count: 1_000) + [
+                #"{"type":"message","input_tokens":1.0}"#
+            ]
+        let line = Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", input: 2, output: 10, iterations: steps)
+        #expect(parts(line) == [UsagePart(inputTokens: 2, outputTokens: 10)])
+    }
+
+    @Test("a step with an empty model runs on the call's model")
+    func emptyStepModel() {
+        let line = threeSteps {
+            $0.replacingOccurrences(
+                of: #"{"type":"message","input_tokens":2"#, with: #"{"type":"message","model":"","input_tokens":2"#)
+        }
+        #expect(parts(line) == [firstStep, advisorStep, lastStep])
+    }
+
+    @Test("a step type that is not a string is a main step, and the steps are still used")
+    func oddStepType() {
+        let line = threeSteps {
+            $0.replacingOccurrences(
+                of: #"{"type":"message","input_tokens":2"#, with: #"{"type":["message"],"input_tokens":2"#
+            )
+            .replacingOccurrences(of: #""type":"advisor_message""#, with: #""type":7"#)
+        }
+        var advisorAsMain = advisorStep
+        advisorAsMain.kind = .message
+        #expect(parts(line) == [firstStep, advisorAsMain, lastStep])
+    }
+
+    @Test("a step whose model is not a string is dropped; with no step left the top-level usage is used")
+    func oddStepModel() {
+        let line = threeSteps { $0.replacingOccurrences(of: #""model":"claude-fable-5-2""#, with: #""model":7"#) }
+        #expect(parts(line) == [firstStep, lastStep])
+        let only = Fixture.call(
+            id: "m1", at: "2026-11-10T00:00:00Z", input: 3, output: 30,
+            iterations: [#"{"type":"message","model":{"id":"claude-fable-5-2"},"input_tokens":3,"output_tokens":30}"#])
+        #expect(parts(only) == [UsagePart(inputTokens: 3, outputTokens: 30)])
+        let null = threeSteps { $0.replacingOccurrences(of: #""model":"claude-fable-5-2""#, with: #""model":null"#) }
+        var advisorOnCallModel = advisorStep
+        advisorOnCallModel.model = nil
+        #expect(parts(null) == [firstStep, advisorOnCallModel, lastStep])
+    }
+
+    @Test("an unknown key in a cache breakdown is ignored, whatever its value")
+    func unknownCacheKey() {
+        let line = threeSteps {
+            $0.replacingOccurrences(
+                of: #""ephemeral_5m_input_tokens":0}"#,
+                with: #""ephemeral_5m_input_tokens":0,"ephemeral_24h_input_tokens":"soon"}"#)
+        }
+        #expect(parts(line) == [firstStep, advisorStep, lastStep])
+        let fraction = Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", output: 10)
+            .replacingOccurrences(
+                of: #""ephemeral_5m_input_tokens":0}"#, with: #""ephemeral_5m_input_tokens":0,"later":1.5}"#)
+        #expect(parts(fraction) == [UsagePart(inputTokens: 2, outputTokens: 10)])
+    }
 }
