@@ -153,6 +153,126 @@ struct IndexOwnershipTests {
         #expect(!exists(home.appendingPathComponent(".claude/x")))
     }
 
+    // HIGH (deletion re-review): a meta table with a schema_version row was taken for this app's old index.
+    @Test(
+        "another app's database with its own meta table is left untouched",
+        arguments: ["7 value", "4 value", "4 val"])
+    func foreignMetaLeftAlone(variant: String) throws {
+        let parts = variant.split(separator: " ").map(String.init)
+        let dir = try TempDir()
+        do {
+            let foreign = try SQLiteDatabase(path: database(dir).path)
+            try foreign.execute(
+                """
+                CREATE TABLE meta(key TEXT PRIMARY KEY, \(parts[1]) TEXT);
+                INSERT INTO meta VALUES('schema_version', '\(parts[0])');
+                CREATE TABLE files(id INTEGER PRIMARY KEY, path TEXT); INSERT INTO files(path) VALUES('mine');
+                CREATE TABLE calls(id INTEGER PRIMARY KEY); INSERT INTO calls VALUES(1);
+                """)
+        }
+        let before = try Data(contentsOf: database(dir))
+        let mode = try FileManager.default.attributesOfItem(atPath: database(dir).path)[.posixPermissions] as? Int
+
+        #expect(throws: IndexOpenError.self) { try indexer(dir) }
+
+        #expect(try Data(contentsOf: database(dir)) == before)
+        #expect(try FileManager.default.attributesOfItem(atPath: database(dir).path)[.posixPermissions] as? Int == mode)
+        for suffix in ["-wal", "-shm"] { #expect(!exists(database(dir), suffix: suffix)) }
+    }
+
+    // HIGH (deletion re-review): the path checked was not the path written.
+    @Test("a dangling link or link/.. cannot put the index inside the root")
+    func linkTricksRefused() throws {
+        let dir = try TempDir()
+        let root = dir.url.appendingPathComponent("root")
+        let out = dir.url.appendingPathComponent("out")
+        let manager = FileManager.default
+        try manager.createDirectory(at: root.appendingPathComponent("-p/sub"), withIntermediateDirectories: true)
+        try manager.createDirectory(at: out, withIntermediateDirectories: true)
+        try manager.createSymbolicLink(
+            at: out.appendingPathComponent("index.sqlite"),
+            withDestinationURL: root.appendingPathComponent("planted.sqlite"))
+        try manager.createSymbolicLink(
+            at: out.appendingPathComponent("link"), withDestinationURL: root.appendingPathComponent("-p/sub"))
+        let home = dir.url.appendingPathComponent("home")
+
+        let tricks = [
+            out.appendingPathComponent("index.sqlite"),
+            URL(fileURLWithPath: out.path + "/link/../index.sqlite"),
+            URL(fileURLWithPath: out.path + "/link/../new/index.sqlite"),
+        ]
+        for database in tricks {
+            #expect(throws: IndexOpenError.self) { try Indexer(root: root, databaseURL: database, home: home) }
+        }
+        for planted in ["planted.sqlite", "-p/index.sqlite", "-p/new"] {
+            #expect(!exists(root.appendingPathComponent(planted)))
+        }
+    }
+
+    // MEDIUM (deletion re-review): a new index kept its schema and marker only in the WAL until a checkpoint.
+    @Test("a new index is recognizable from its file while it is still open")
+    func newIndexRecognizableWhileOpen() throws {
+        let dir = try TempDir()
+        let open = try indexer(dir)
+
+        #expect(try header(database(dir)).applicationID == UInt32(bitPattern: Indexer.applicationID))
+        let probe = try SQLiteDatabase(immutableSnapshotOf: database(dir))
+        #expect(try probe.queryRow("SELECT value FROM meta WHERE key = 'schema_version'") { $0.text(0) } == "4")
+        #expect(try calls(open) == 0)
+    }
+
+    // LOW (deletion re-review): side files left by a database whose main file is gone were overwritten.
+    @Test("side files without their database are left untouched")
+    func orphanSideFilesLeftAlone() throws {
+        let dir = try TempDir()
+        try dir.write("someone's wal", to: "index.sqlite-wal")
+        try dir.write("someone's journal", to: "index.sqlite-journal")
+
+        #expect(throws: IndexOpenError.self) { try indexer(dir) }
+
+        #expect(try String(contentsOfFile: database(dir).path + "-wal", encoding: .utf8) == "someone's wal")
+        #expect(try String(contentsOfFile: database(dir).path + "-journal", encoding: .utf8) == "someone's journal")
+        #expect(!exists(database(dir)))
+    }
+
+    // LOW (deletion re-review): starting over removed whatever was at the path, a folder included; a pipe hung.
+    @Test("a folder, link or pipe at the index path is reported, never removed or waited on")
+    func nonFilesNotRemoved() throws {
+        let dir = try TempDir()
+        try dir.write("keep", to: "index.sqlite/inside.txt")
+        #expect(throws: IndexOpenError.self) { try indexer(dir, .startOver) }
+        #expect(throws: IndexOpenError.self) { try indexer(dir, .replaceUnusable) }
+        #expect(exists(dir.url.appendingPathComponent("index.sqlite/inside.txt")))
+
+        let other = try TempDir()
+        #expect(mkfifo(database(other).path, 0o600) == 0)
+        #expect(throws: IndexOpenError.self) { try indexer(other) }
+        #expect(throws: IndexOpenError.self) { try indexer(other, .replaceUnusable) }
+        #expect(exists(database(other)))
+    }
+
+    @Test("a damaged index at a path someone chose is reported, not deleted")
+    func damagedExternalKept() throws {
+        let dir = try TempDir()
+        try dir.write(call("m1"), to: "projects/-p/s1.jsonl")
+        do {
+            let first = try indexer(dir)
+            try first.indexAll()
+        }
+        let handle = try FileHandle(forWritingTo: database(dir))
+        try handle.seek(toOffset: 4096)
+        try handle.write(contentsOf: Data(repeating: 0xA5, count: 8192))
+        try handle.close()
+        let before = try Data(contentsOf: database(dir))
+
+        #expect(throws: (any Error).self) {
+            let damaged = try indexer(dir)
+            try damaged.indexAll()
+        }
+
+        #expect(try Data(contentsOf: database(dir)) == before)
+    }
+
     @Test("index files are private to the user")
     func privatePermissions() throws {
         let dir = try TempDir()

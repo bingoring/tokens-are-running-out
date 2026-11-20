@@ -35,8 +35,11 @@ final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private var statements: [String: Statement] = [:]
 
-    init(path: String) throws {
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX
+    /// `noFollow`: refuse a path with any symbolic link in it. The index path is resolved to its physical path
+    /// before it is checked, so a link that appears there afterwards is not followed.
+    init(path: String, noFollow: Bool = false) throws {
+        let flags =
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX | (noFollow ? SQLITE_OPEN_NOFOLLOW : 0)
         let code = sqlite3_open_v2(path, &handle, flags, nil)
         guard code == SQLITE_OK else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open"
