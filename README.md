@@ -75,10 +75,10 @@ git tag v1.2.3
 git push origin v1.2.3
 ```
 
-- `v1.2.3-rc.1` makes a GitHub pre-release and leaves the Homebrew cask alone.
-- `v1.2.3` makes a release and points the cask in [bingoring/homebrew-tap](https://github.com/bingoring/homebrew-tap) at it.
-- The workflow builds the universal app, signs it with the Developer ID (hardened runtime), notarizes it, staples the ticket and attaches the zip and its SHA-256. It never replaces an existing release.
-- If only the Homebrew step fails, for example because the token expired, register a new token and run the **Update Homebrew tap** workflow with the tag. It does not rebuild.
+- `v1.2.3-rc.1` makes a GitHub pre-release and leaves the Homebrew cask alone. A pre-release can be tagged on a pull request's branch to try the pipeline.
+- `v1.2.3` makes a release and points the cask in [bingoring/homebrew-tap](https://github.com/bingoring/homebrew-tap) at it. It must be tagged on a commit on `main`, and it only moves the cask forward: an older version leaves the cask as it is.
+- Before anything is signed, the workflow runs the same build, tests and anti-goal checks as CI and checks the built app for network code and entitlements. Then it signs the universal app with the Developer ID (hardened runtime), notarizes it, staples the ticket and attaches the zip and its SHA-256. It never replaces an existing release.
+- If only the Homebrew step fails, for example because the token expired, register a new token and run the **Update Homebrew tap** workflow with the tag. It does not rebuild. The same workflow can also move the cask back to an older release.
 
 The workflow needs these repository secrets:
 
