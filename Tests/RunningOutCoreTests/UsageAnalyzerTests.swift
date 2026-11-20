@@ -224,6 +224,23 @@ struct UsageAnalyzerTests {
         #expect(lowered.rebuildCount == 1)
     }
 
+    @Test("a threshold below the default makes a smaller write a rebuild, and that write goes to its cause")
+    func lowerRebuildThreshold() throws {
+        let dir = try TempDir()
+        // Session start: write 40,000 x 8000 = 320,000,000; input 1,000 x 4000 + output 2,000 x 20000 = 44,000,000.
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", input: 1_000, output: 2_000, write: 40_000),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir, rebuildThreshold: 30_000)
+        #expect(report.rebuildCount == 1)
+        #expect(report.rebuildTokens == 40_000)
+        #expect(report.mainRebuildCounts == [.sessionStart: 1])
+        #expect(report.bucketCosts[.sessionStartAndCompaction] == 320_000_000)
+        #expect(report.bucketCosts[.normalWork] == 44_000_000)
+        #expect(report.totalCost == 364_000_000)
+    }
+
     @Test("a rebuild keeps the context size of the call before it, for long-break rows")
     func previousContext() throws {
         let report = try makeReport()

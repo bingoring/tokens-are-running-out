@@ -95,6 +95,14 @@ struct RebuildClassifierTests {
         #expect(causes(events)["b"] == "expiredShortBreak")
     }
 
+    @Test("a five-minute cache expires only when the gap is longer than 300 seconds")
+    mutating func fiveMinuteBoundary() {
+        let atLimit = [call("a", at: 0, ttl: .fiveMinutes), call("b", at: 300, ttl: .fiveMinutes)]
+        let pastLimit = [call("c", at: 0, ttl: .fiveMinutes), call("d", at: 301, ttl: .fiveMinutes)]
+        #expect(causes(atLimit)["b"] == "unknown")
+        #expect(causes(pastLimit)["d"] == "expiredShortBreak")
+    }
+
     @Test("a call without a TTL inherits the last TTL seen in the file, else the main default of one hour")
     mutating func ttlFallback() {
         let inherited = [

@@ -175,6 +175,22 @@ struct RecordParserTests {
         #expect(call.outputTokens == 30)
     }
 
+    @Test("the context size is the prompt of the last main-model step, not a trailing advisor step or the first step")
+    func contextFromLastModelStep() {
+        let line = Fixture.call(
+            id: "m1", at: "2026-11-10T00:00:00Z", input: 3, output: 30, read: 70_000, write: 60_300,
+            iterations: [
+                Fixture.iteration(input: 2, output: 10, write: 60_000),
+                Fixture.iteration(input: 1, output: 20, read: 70_000, write: 300),
+                Fixture.iteration(type: "advisor_message", model: "claude-fable-5-2", input: 50_000, output: 800),
+            ])
+        guard case .call(let call) = parse(line) else {
+            Issue.record("expected a call")
+            return
+        }
+        #expect(call.contextTokens == 1 + 70_000 + 300)
+    }
+
     @Test("a single iteration that repeats the top-level usage adds nothing")
     func singleIterationIsTopLevel() {
         let line = Fixture.call(
