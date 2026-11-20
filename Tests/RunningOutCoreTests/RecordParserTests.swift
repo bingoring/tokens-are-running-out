@@ -199,7 +199,19 @@ struct RecordParserTests {
         #expect(call.parts == [UsagePart(inputTokens: 2, outputTokens: 10)])
     }
 
-    @Test("a token count below zero or above one billion makes the line malformed, so sums cannot overflow")
+    @Test("a call with more than 1,000 iterations is malformed; 1,000 is still a call")
+    func iterationLimit() {
+        let at = "2026-11-10T00:00:00Z"
+        let steps = Array(repeating: Fixture.iteration(input: 1, output: 1), count: 1_001)
+        guard case .call(let call) = parse(Fixture.call(id: "m1", at: at, iterations: Array(steps.dropLast()))) else {
+            Issue.record("1,000 iterations are still a call")
+            return
+        }
+        #expect(call.iterations.count == 1_000)
+        #expect(parse(Fixture.call(id: "m1", at: at, iterations: steps)) == .malformed)
+    }
+
+    @Test("a token count below zero or above one billion makes the line malformed, so one call's cost fits in Int64")
     func tokenLimits() {
         let at = "2026-11-10T00:00:00Z"
         #expect(parse(Fixture.call(id: "m1", at: at, input: -1)) == .malformed)

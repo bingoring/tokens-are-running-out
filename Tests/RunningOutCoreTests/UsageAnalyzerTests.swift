@@ -242,4 +242,52 @@ struct UsageAnalyzerTests {
         #expect(report.rebuilds.first?.priced == false)
         #expect(report.unpricedModels == ["claude-future-9": 1])
     }
+
+    // MARK: - Overflow (R-1)
+
+    @Test("costs past Int64 stop at its maximum instead of crashing")
+    func costSumsSaturate() throws {
+        let dir = try TempDir()
+        // Each call costs 1e9 x (15000 + 75000 + 1500 + 30000) = 121,500,000,000,000 at Opus 4 prices, so 80,000
+        // calls add up to about 9.7e18 nano-USD, past Int64.max (about 9.2e18).
+        var text = ""
+        for n in 0..<80_000 {
+            text += Fixture.call(
+                id: "m\(n)", at: "2026-11-10T00:00:00Z", session: "s1", model: "claude-opus-4", input: 1_000_000_000,
+                output: 1_000_000_000, read: 1_000_000_000, write: 1_000_000_000)
+        }
+        try dir.write(text, to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.calls == 80_000)
+        #expect(report.totalCost == Int.max)
+        #expect(report.bucketCosts[.normalWork] == Int.max)
+        #expect(report.inputTokens == 80_000 * 1_000_000_000)
+        let rendered = ReportText.render(report, fromText: "A", toText: "B")
+        #expect(rendered.contains("cost (API list)     $9,223,372,036.85"))
+    }
+
+    @Test("a call with more than 1,000 iterations is dropped, so one call cannot overflow the sums")
+    func tooManyIterations() throws {
+        let dir = try TempDir()
+        let step = Fixture.iteration(
+            input: 1_000_000_000, output: 1_000_000_000, read: 1_000_000_000, write: 1_000_000_000)
+        try dir.write(
+            Fixture.call(
+                id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", model: "claude-opus-4", input: 1_000_000_000,
+                output: 1_000_000_000, read: 1_000_000_000, write: 1_000_000_000,
+                iterations: Array(repeating: step, count: 80_000)),
+            to: "projects/-p/s1.jsonl")
+        let report = try report(of: dir)
+        #expect(report.calls == 0)
+        #expect(report.totalCost == 0)
+    }
+
+    @Test("the menu bar share stays defined when both break costs are at the maximum")
+    func idleShareSaturates() {
+        var report = UsageReport(from: 0, to: 1)
+        report.totalCost = Int.max
+        report.shortBreak.cost = Int.max
+        report.longBreak.cost = Int.max
+        #expect(report.idleRebuildShare == 1)
+    }
 }

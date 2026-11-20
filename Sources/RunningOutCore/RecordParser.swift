@@ -139,8 +139,11 @@ public enum RecordParser {
         }
     }
 
-    /// Token counts above this are not real usage. The limit also keeps every cost sum far from overflowing.
+    /// Token counts above this are not real usage. With `iterationLimit` it keeps one call's cost far inside Int64
+    /// (about 1.2e17 nano-USD at the highest list price); sums over many calls saturate in `UsageAnalyzer` instead.
     static let tokenLimit = 1_000_000_000
+    /// More steps than this in one call are not real usage, and the call is dropped as malformed.
+    static let iterationLimit = 1_000
 
     /// R2: only real API calls with an id, a timestamp and usage.
     private static func call(from raw: RawLine) -> ParsedLine {
@@ -152,6 +155,7 @@ public enum RecordParser {
             let timestamp = raw.timestamp.flatMap(Timestamp.parse)
         else { return .assistantWithoutCall(timestamp: raw.timestamp.flatMap(Timestamp.parse)) }
 
+        guard (usage.iterations?.count ?? 0) <= iterationLimit else { return .malformed }
         let top = part(
             usage.input_tokens, usage.output_tokens, usage.cache_read_input_tokens, usage.cache_creation_input_tokens,
             usage.cache_creation)

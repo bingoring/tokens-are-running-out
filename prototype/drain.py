@@ -14,6 +14,7 @@ Rules (design doc sections 6.1-6.4, with the 2-2 corrections in DECISIONS.md):
     in that file holds the final usage (Claude Code fills the usage in as the response streams)
   * `usage.iterations` splits a call into steps; an `advisor_message` step runs on its own model
     and is left out of the top-level input and output, so cost is the sum over the steps
+  * a call with more than 1,000 steps or a token count outside 0..1e9 is malformed and skipped
   * a step is a rebuild when it writes >= the threshold (default 50,000, --rebuild-threshold) cache
     tokens and more than it read; a call is a rebuild when one of its main-model steps is (advisor
     steps never are)
@@ -41,6 +42,7 @@ import re
 
 THRESHOLD = 50_000
 TOKEN_LIMIT = 1_000_000_000
+ITERATION_LIMIT = 1_000
 DEFAULT_MODEL = "claude-opus-5-5"
 PRICING_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "Sources", "RunningOutCore", "Resources", "pricing.json"
@@ -193,7 +195,11 @@ def iter_calls(path):
             top = [u.get(k) for k in TOKEN_KEYS] + ([c.get(k) for k in c] if c else [])
             if any(v is not None and not is_count(v) for v in top):
                 continue
-            # A count outside 0..1e9 is not real usage: the line is malformed and skipped.
+            # More than 1,000 steps or a count outside 0..1e9 is not real usage: the line is malformed and
+            # skipped. Together they keep one call's cost far inside the app's Int64 sums.
+            its = steps_of(u)
+            if its is not None and len(its) > ITERATION_LIMIT:
+                continue
             values = counts(u) + [v for _, _, s in parts(m["model"], u) for v in counts(s)]
             if any(v < 0 or v > TOKEN_LIMIT for v in values):
                 continue
