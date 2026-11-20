@@ -16,9 +16,18 @@ struct ParityTests {
         let dir = try TempDir()
         let projects = fixtures.appendingPathComponent("projects")
         let files = try #require(FileManager.default.enumerator(at: projects, includingPropertiesForKeys: nil))
+        var written: [String] = []
         for case let file as URL in files where file.lastPathComponent.hasSuffix(".jsonl.txt") {
             let relative = String(file.path.dropFirst(fixtures.path.count + 1).dropLast(".txt".count))
             try dir.write(String(contentsOf: file, encoding: .utf8), to: relative)
+            written.append(relative)
+        }
+        // A copied call whose sessionId matches both files goes to the file created first. As in parity.sh, the
+        // creation times are a minute apart in reverse path order, so a tie broken by path would show.
+        for (index, relative) in written.sorted(by: >).enumerated() {
+            try dir.setCreationDate(
+                Date(timeIntervalSince1970: 1_767_225_600 + Double(index) * 60),
+                of: dir.url.appendingPathComponent(relative))
         }
         let indexer = try Indexer(
             root: dir.url.appendingPathComponent("projects"),

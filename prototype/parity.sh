@@ -13,6 +13,15 @@ trap 'rm -rf "$work"' EXIT
     cp "$fixtures/$file" "$work/${file%.txt}"
 done
 
+# A copied call whose sessionId matches both files goes to the file created first. Pin the creation times, a
+# minute apart in reverse path order, so the owner is the same in every run and a tie broken by path would show.
+# ParityTests does the same. Setting a file's time earlier also moves its creation time on APFS.
+minute=0
+(cd "$work" && find projects -name '*.jsonl' | LC_ALL=C sort -r) | while read -r file; do
+    touch -t "$(printf '2026010100%02d' "$minute")" "$work/$file"
+    minute=$((minute + 1))
+done
+
 window="--from 2026-11-10T00:00:00Z --to 2026-11-17T00:00:00Z"
 swift build --product running-out >/dev/null
 # shellcheck disable=SC2086
