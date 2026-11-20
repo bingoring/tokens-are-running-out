@@ -44,7 +44,12 @@ public enum Presentation {
             row(.sessionStartAndCompaction, cost(.sessionStartAndCompaction)),
             row(.modelChangeAndUpdate, cost(.modelChangeAndUpdate)), row(.unknown, cost(.unknown)),
         ]
-        var other = row(.other, children.map(\.cost).reduce(0, +))
+        // The analyzer stops sums at Int.max (R-1), so this one stops there too instead of trapping.
+        let otherCost = children.reduce(0) { sum, child in
+            let (total, overflow) = sum.addingReportingOverflow(child.cost)
+            return overflow ? Int.max : total
+        }
+        var other = row(.other, otherCost)
         other.children = children
         return [
             row(.normalWork, cost(.normalWork)), row(.shortBreak, cost(.shortBreakRebuild)),

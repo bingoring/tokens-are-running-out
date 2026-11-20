@@ -29,6 +29,16 @@ struct PresentationTests {
         #expect(rows.first?.share == 0.4)
     }
 
+    // R-1: the analyzer stops sums at Int.max; adding the Other row's causes must not trap after it.
+    @Test("costs at the saturation limit stop at Int.max instead of trapping")
+    func saturatedCosts() {
+        var huge = UsageReport(from: 0, to: 1)
+        huge.bucketCosts = [.sessionStartAndCompaction: Int.max, .modelChangeAndUpdate: Int.max, .unknown: 1]
+        huge.totalCost = Int.max
+        let rows = Presentation.breakdown(huge)
+        #expect(rows.last?.cost == Int.max)
+    }
+
     @Test("an empty period keeps every row at zero")
     func emptyRows() {
         let rows = Presentation.breakdown(UsageReport(from: 0, to: 1))
