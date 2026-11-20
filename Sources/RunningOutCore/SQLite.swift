@@ -7,7 +7,7 @@ public struct SQLiteError: Error, CustomStringConvertible {
     public var description: String { "SQLite error \(code): \(message)" }
 
     /// The file is not a usable database and should be rebuilt.
-    var isCorruption: Bool { code == SQLITE_CORRUPT || code == SQLITE_NOTADB }
+    public var isCorruption: Bool { code == SQLITE_CORRUPT || code == SQLITE_NOTADB }
 }
 
 enum SQLValue {
@@ -40,6 +40,19 @@ final class SQLiteDatabase {
         }
         // Another process (the CLI next to the app) may hold the write lock briefly.
         sqlite3_busy_timeout(handle, 5_000)
+    }
+
+    /// Opens a file read-only without taking locks or creating side files (`immutable=1`), to look at a file
+    /// that may belong to another app.
+    init(immutableSnapshotOf url: URL) throws {
+        let uri = url.standardizedFileURL.absoluteString + "?immutable=1"
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX
+        let code = sqlite3_open_v2(uri, &handle, flags, nil)
+        guard code == SQLITE_OK else {
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "cannot open"
+            sqlite3_close_v2(handle)
+            throw SQLiteError(code: code, message: message)
+        }
     }
 
     deinit {

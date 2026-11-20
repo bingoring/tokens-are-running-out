@@ -50,13 +50,11 @@ public enum CLIParser {
         }
         let root = options["--root"].map { URL(fileURLWithPath: $0) } ?? defaultRoot(home: home)
         let database = options["--db"].map { URL(fileURLWithPath: $0) } ?? defaultDatabase(home: home)
-        // R9: the tool never writes into Claude Code's folder or the folder it reads.
-        let databasePath = database.standardizedFileURL.path
-        for forbidden in [home.appendingPathComponent(".claude"), root] {
-            let folder = forbidden.standardizedFileURL.path
-            if databasePath == folder || databasePath.hasPrefix(folder + "/") {
-                throw .usage("The index cannot live inside \(folder); it must stay read-only.")
-            }
+        // R9: the tool never writes into Claude Code's folder or the folder it reads (links and case resolved).
+        do {
+            try IndexLocation.check(database: database, root: root, home: home)
+        } catch {
+            throw .usage(error.description)
         }
 
         switch command {
@@ -84,7 +82,7 @@ public enum CLIParser {
             }
             var threshold = RebuildClassifier.rebuildThreshold
             if let text = options["--rebuild-threshold"] {
-                guard let value = Int(text), value >= 1 else {
+                guard text.allSatisfy({ $0.isASCII && $0.isNumber }), let value = Int(text), value >= 1 else {
                     throw .usage("--rebuild-threshold takes a whole number of tokens, 1 or more.")
                 }
                 threshold = value
@@ -96,9 +94,11 @@ public enum CLIParser {
     }
 
     /// Accepts only full UTC timestamps in whole seconds, such as `2026-11-10T00:00:00Z`, so the window
-    /// printed back is exactly the window given.
+    /// printed back is exactly the window given. A date that does not exist (February 30, hour 24) is refused
+    /// rather than rolled over.
     private static func strictUTC(_ text: String) -> Double? {
-        guard text.wholeMatch(of: #/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/#) != nil else { return nil }
-        return Timestamp.parse(text)
+        guard text.wholeMatch(of: #/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/#) != nil, let value = Timestamp.parse(text)
+        else { return nil }
+        return ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: value)) == text ? value : nil
     }
 }

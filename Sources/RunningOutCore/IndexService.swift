@@ -5,8 +5,8 @@ public actor IndexService {
     private let indexer: Indexer
     private var prices: PriceTable?
 
-    public init(root: URL, databaseURL: URL) throws {
-        indexer = try Indexer(root: root, databaseURL: databaseURL)
+    public init(root: URL, databaseURL: URL, opening: IndexOpening = .refuseUnknown) throws {
+        indexer = try Indexer(root: root, databaseURL: databaseURL, opening: opening)
     }
 
     public func report(from: Double, to: Double, rebuildThreshold: Int = RebuildClassifier.rebuildThreshold) throws

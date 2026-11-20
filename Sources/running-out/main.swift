@@ -38,8 +38,12 @@ func openService(root: URL, database: URL) -> IndexService {
     guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
         fail("No Claude Code transcripts at \(root.path)", code: 3)
     }
+    // Only the app's own index is replaced when damaged; a file someone pointed --db at is reported instead.
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let isAppIndex = database.standardizedFileURL == CLIParser.defaultDatabase(home: home).standardizedFileURL
     do {
-        return try IndexService(root: root, databaseURL: database)
+        return try IndexService(
+            root: root, databaseURL: database, opening: isAppIndex ? .replaceUnusable : .refuseUnknown)
     } catch {
         fail("Cannot open index at \(database.path): \(error)", code: 4)
     }
