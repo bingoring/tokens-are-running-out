@@ -20,7 +20,6 @@ struct LargeSessionsSection: View {
             }
             Text("Paste it into the session and press Return. It works best when a task is done.", bundle: .module)
                 .font(.callout)
-                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -50,7 +49,6 @@ struct LargeSessionRow: View {
                 }
             }
             .font(.callout)
-            .foregroundStyle(.secondary)
             .monospacedDigit()
         }
     }
