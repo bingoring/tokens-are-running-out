@@ -27,8 +27,14 @@ for path in glob.glob(DATA, recursive=True):
     configuration = configuration.rsplit(os.sep, 1)[-1]
     by_configuration.setdefault(configuration, []).append(path)
 newest = max(by_configuration.values(), key=lambda paths: max(map(os.path.getmtime, paths)), default=[])
-used = set()
+# One file per source file: a build for one architecture leaves the other architecture's older strings behind.
+latest = {}
 for path in newest:
+    name = os.path.basename(path)
+    if name not in latest or os.path.getmtime(path) > os.path.getmtime(latest[name]):
+        latest[name] = path
+used = set()
+for path in latest.values():
     with open(path, encoding="utf-8") as fh:
         for entries in json.load(fh).get("tables", {}).values():
             used.update(entry["key"] for entry in entries)
