@@ -40,6 +40,22 @@ struct PopoverHeightTests {
         #expect(height(tall(), maxHeight: 500) <= 500)
     }
 
+    /// The menu bar window can propose a height smaller than the content; the content must not shrink to fit it.
+    /// v0.2.0 shipped with the scroll area taking the proposal, so the popover showed only Settings and Quit.
+    @Test("a small proposed height does not collapse the content")
+    func smallProposalDoesNotCollapse() {
+        _ = NSApplication.shared
+        let short = AppModel.preview(phase: .noTranscripts, now: now)
+        let natural = height(short, maxHeight: 10_000)
+        let controller = NSHostingController(rootView: PopoverView(model: short, maxHeight: 10_000))
+        let proposed = controller.sizeThatFits(in: CGSize(width: 360, height: 40))
+        #expect(proposed.height == natural)
+
+        let capped = NSHostingController(rootView: PopoverView(model: tall(), maxHeight: 500))
+            .sizeThatFits(in: CGSize(width: 360, height: 40))
+        #expect(capped.height > 400 && capped.height <= 500)
+    }
+
     @Test("a short popover keeps its natural height")
     func shortPopoverKeepsItsHeight() {
         let short = AppModel.preview(phase: .noTranscripts, now: now)
