@@ -41,7 +41,8 @@ struct CompactPromptTests {
         let root = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: catalog)) as? [String: Any])
         let strings = try #require(root["strings"] as? [String: Any])
         let entry = try #require(strings[Self.english] as? [String: Any], "the English prompt is a catalog key")
-        let ko = (((entry["localizations"] as? [String: Any])?["ko"] as? [String: Any])?["stringUnit"]
+        let ko =
+            (((entry["localizations"] as? [String: Any])?["ko"] as? [String: Any])?["stringUnit"]
             as? [String: Any])?["value"] as? String
         #expect(ko == Self.korean)
     }
