@@ -118,7 +118,33 @@ func main() throws {
     var unpricedEvent = report.rebuilds[0]
     unpricedEvent.priced = false
 
+    // Large sessions (2-5): each call re-reads the context at the Opus 5.5 cache-read price, 200 nano-USD a token.
+    func large(
+        _ id: String, _ title: String?, _ tokens: Int, priced: Bool = true, status: LargeSession.Status = .running
+    ) -> LargeSession {
+        LargeSession(
+            sessionID: id, title: title, contextTokens: tokens, readCost: tokens * 200,
+            model: priced ? "claude-opus-5-5" : "claude-future-9", priced: priced, status: status)
+    }
+    let largeTwo = [
+        large("s4", "Refactor parser", 620_000),
+        large("s5", "Write release notes for the next version and update the changelog", 240_000),
+    ]
+    let largeExpiring = [large("s1", "Refactor parser", 720_000), large("s5", "Migrate the billing tables", 240_000)]
+    let largeMany = (0..<7).map { n in large("l\(n)", "Session \(n + 1)", 900_000 - n * 90_000) }
+    let largeUnpriced = [
+        large("u1", "Try the new model", 410_000, priced: false),
+        large("u2", nil, 230_000, status: .unreadable),
+    ]
+
     let states: [(String, AppModel)] = [
+        ("popover-large-sessions", .preview(phase: .ready, now: now, report: report, largeSessions: largeTwo)),
+        (
+            "popover-large-expiring",
+            .preview(phase: .ready, now: now, report: report, warnings: warnings, largeSessions: largeExpiring)
+        ),
+        ("popover-large-many", .preview(phase: .ready, now: now, report: report, largeSessions: largeMany)),
+        ("popover-large-unpriced", .preview(phase: .ready, now: now, report: report, largeSessions: largeUnpriced)),
         ("popover-many-warnings", .preview(phase: .ready, now: now, report: estimated, warnings: many)),
         ("popover-ready", .preview(phase: .ready, now: now, report: report, warnings: warnings, settings: notifying)),
         ("popover-all-causes", .preview(phase: .ready, now: now, report: report, settings: changed)),
@@ -133,9 +159,16 @@ func main() throws {
         ("popover-format-change", .preview(phase: .ready, now: now, report: report, health: unhealthy)),
         ("popover-empty", .preview(phase: .ready, now: now, report: empty)),
     ]
+    // Full length for review, whatever the screen of the machine that renders them.
     for (name, model) in states {
-        try render(PopoverView(model: model), name: name, width: 360, to: folder)
+        try render(PopoverView(model: model, maxHeight: 10_000), name: name, width: 360, to: folder)
     }
+    // The popover at its maximum height on a small screen: the content scrolls, Settings and Quit stay.
+    try render(
+        PopoverView(
+            model: .preview(phase: .ready, now: now, report: report, warnings: many, largeSessions: largeMany),
+            maxHeight: 700),
+        name: "popover-capped", width: 360, to: folder)
     try render(RebuildDetailView(event: report.rebuilds[0]), name: "reason-short-break", width: 320, to: folder)
     try render(RebuildDetailView(event: report.rebuilds[1]), name: "reason-long-break", width: 320, to: folder)
     try render(RebuildDetailView(event: unpricedEvent), name: "reason-unpriced", width: 320, to: folder)

@@ -71,7 +71,8 @@ public enum ExpiryCalculator {
         }
         var warnings: [ExpiryWarning] = []
         for candidate in candidates {
-            guard let last = try lastCall(candidate.sessionID) else { continue }
+            // After a compaction the next message rewrites only the summary, so there is nothing to warn about.
+            guard let last = try lastCall(candidate.sessionID), !last.compactedAfter else { continue }
             let expiresAt = last.timestamp + last.ttl.seconds
             guard last.contextTokens >= warningContextTokens, now < expiresAt else { continue }
             let (price, known) = prices.lookup(model: last.model, promptTokens: last.contextTokens)

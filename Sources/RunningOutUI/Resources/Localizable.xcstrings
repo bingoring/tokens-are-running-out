@@ -207,6 +207,16 @@
         }
       }
     },
+    "/compact Summarize so work can continue without this chat. Keep exactly: 1. Goal and done criteria, in the user's words. 2. Rules and preferences the user typed (not system, tool or CLAUDE.md rules). 3. Decisions, reasons, rejected options. 4. Files to continue: repo path and state. 5. State: branch, commits, push, running jobs, last step. 6. Open problems: exact errors, flagged but unfixed issues. 7. All remaining work and the next action. Drop raw tool output, rereadable files, old plans, long code, emails, account IDs; one line per failed approach. Use the user's language.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/compact 이 대화를 다시 읽지 않고도 작업을 이어 갈 수 있게 요약해 줘. 다음은 정확히 남겨: 1. 목표: 사용자가 요청한 것과 완료 기준, 사용자의 표현 그대로. 2. 사용자 지시: 사용자가 직접 입력한 메시지에 나온 규칙, 제약, 선호만. 시스템 지시, 도구 규칙, CLAUDE.md 내용은 넣지 마. 3. 결정: 결정마다 이유, 버린 대안과 버린 이유. 4. 파일: 이어서 작업하는 데 필요한 파일을 저장소 루트 기준 경로로, 상태(완료, 일부, 다시 볼 것)와 함께. 5. 현재 상태: 브랜치, 커밋, push 여부, 실행 중인 것, 마지막으로 끝낸 단계. 6. 열린 문제: 아직 풀리지 않은 오류(메시지 원문)와, 지적했지만 아직 고치지 않은 문제. 7. 남은 작업: 아직 하지 않은 일 전체 목록과, 그중 바로 할 다음 행동. 도구 출력 원문, 다시 읽으면 되는 파일 내용, 바뀐 계획, 긴 코드, 이메일이나 계정 ID 같은 식별자는 넣지 마. 실패한 접근은 다시 시도하지 않게 한 줄씩만 남겨. 사용자가 쓰던 언어로 써."
+          }
+        }
+      }
+    },
     "1 hour": {
       "localizations": {
         "ko": {
@@ -457,12 +467,102 @@
         }
       }
     },
+    "Claude Code's running-session files can't be read, so this session may have ended.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code의 실행 세션 파일을 읽을 수 없어, 이 세션은 이미 끝났을 수도 있습니다."
+          }
+        }
+      }
+    },
+    "Compact it before you leave, and only the summary is rebuilt when you come back.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "떠나기 전에 정리해 두면, 돌아와서 다시 만드는 것은 요약뿐입니다."
+          }
+        }
+      }
+    },
+    "Compact prompt copied": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "정리 프롬프트를 복사했습니다"
+          }
+        }
+      }
+    },
+    "Context %@ · re-reads about %@ per call": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컨텍스트 %1$@ · 호출마다 다시 읽는 비용 약 %2$@"
+          }
+        }
+      }
+    },
+    "Context %@ · re-reads an estimated %@ per call": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컨텍스트 %1$@ · 호출마다 다시 읽는 비용 추정 %2$@"
+          }
+        }
+      }
+    },
     "Continuing before the cache expired would have cost %@ instead.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "캐시가 만료되기 전에 이어 갔다면 %@만 들었을 것입니다."
+          }
+        }
+      }
+    },
+    "Copied": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복사됨"
+          }
+        }
+      }
+    },
+    "Copies a /compact command that keeps the goal, decisions, files, state and remaining work.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "목표, 결정, 파일, 상태, 남은 작업을 남기는 /compact 명령을 복사합니다."
+          }
+        }
+      }
+    },
+    "Copy compact prompt": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "정리 프롬프트 복사"
+          }
+        }
+      }
+    },
+    "Copy compact prompt for %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 세션의 정리 프롬프트 복사"
           }
         }
       }
@@ -503,6 +603,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "일반"
+          }
+        }
+      }
+    },
+    "Large sessions": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "큰 세션"
           }
         }
       }
@@ -723,6 +833,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "기타"
+          }
+        }
+      }
+    },
+    "Paste it into the session and press Return. It works best when a task is done.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션에 붙여 넣고 Return을 누르세요. 작업이 끝난 시점에 하면 요약이 가장 깔끔합니다."
           }
         }
       }

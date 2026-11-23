@@ -69,6 +69,9 @@ actor ControlledIndex: IndexServing {
     {
         try await real.expiryWarnings(registry: registry, now: now, warningContextTokens: warningContextTokens)
     }
+    func largeSessions(registry: RegistryState, now: Double, thresholdTokens: Int) async throws -> [LargeSession] {
+        try await real.largeSessions(registry: registry, now: now, thresholdTokens: thresholdTokens)
+    }
     func health(now: Double) async throws -> IndexHealth { try await real.health(now: now) }
 }
 

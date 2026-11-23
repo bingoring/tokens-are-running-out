@@ -16,6 +16,31 @@ struct PresentationTests {
         return report
     }
 
+    @Test("the compact hint goes only on the first warning, when that session is idle and large")
+    func compactHintOnlyOnFirstLargeIdleRow() {
+        func warning(_ context: Int, _ status: ExpiryWarning.Status = .idle) -> ExpiryWarning {
+            ExpiryWarning(
+                sessionID: "s", title: nil, expiresAt: 1_480, ttl: .oneHour, contextTokens: context, rebuildCost: 1,
+                model: "m", priced: true, status: status)
+        }
+        #expect(Presentation.showsCompactHint(warning(200_000), isFirst: true))
+        #expect(!Presentation.showsCompactHint(warning(200_000), isFirst: false))
+        #expect(!Presentation.showsCompactHint(warning(200_000, .unknownStatus), isFirst: true))
+        #expect(!Presentation.showsCompactHint(warning(199_999), isFirst: true))
+    }
+
+    @Test("a large session shows its context and what each call re-reads, marked estimated without a price")
+    func largeSessionDetailText() {
+        var session = LargeSession(
+            sessionID: "s", title: nil, contextTokens: 620_000, readCost: 620_000 * 200, model: "claude-opus-5-5",
+            priced: true, status: .running)
+        #expect(Presentation.largeSessionDetail(session, locale: en) == "Context 620K · re-reads about $0.12 per call")
+        session.priced = false
+        #expect(
+            Presentation.largeSessionDetail(session, locale: en)
+                == "Context 620K · re-reads an estimated $0.12 per call")
+    }
+
     @Test("six rows in a fixed order; Other holds three causes and their sum")
     func rows() {
         let rows = Presentation.breakdown(

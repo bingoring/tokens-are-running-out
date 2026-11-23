@@ -9,7 +9,7 @@ Most usage tools show a gauge. This one reads your local Claude Code transcripts
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/popover-dark.png">
-    <img src="docs/images/popover-light.png" width="360" alt="The popover: sessions whose cache expires soon, today's cost split by cause, and the most expensive cache rebuilds. Every value in this image is made up.">
+    <img src="docs/images/popover-light.png" width="360" alt="The popover: sessions whose cache expires soon, large sessions with a button that copies a compact prompt, today's cost split by cause, and the most expensive cache rebuilds. Every value in this image is made up.">
   </picture>
 </p>
 
@@ -20,6 +20,7 @@ Most usage tools show a gauge. This one reads your local Claude Code transcripts
 - **Break usage down by cause.** For the last 5 hours, today and the last 7 days, it splits API-price-equivalent cost into normal work, cache rebuilds after a short break, cache rebuilds after a long break, subagents, advisor consults and other causes.
 - **Warn before a cache expires.** When an idle session's prompt cache is about to expire, it shows how long is left and how many tokens a resume would have to write again. If you turn it on, it also sends a notification ahead of time. The notification shows the session's title, so it can appear wherever macOS shows notifications.
 - **List the costly rebuilds.** It lists each cache rebuild with the session, the break before it and the rule that classified it.
+- **Point out large sessions.** It lists running sessions whose context has passed 200K tokens, with what each call re-reads at list price, and copies a `/compact` prompt that keeps the goal, decisions, files, state and remaining work. You paste it into the session yourself; the app never runs it.
 
 ## What it will never do
 

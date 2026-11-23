@@ -474,6 +474,35 @@ struct IndexerTests {
         #expect(try indexer.health(now: Date().timeIntervalSince1970).kind == .none)
     }
 
+    @Test("a compaction after the last call marks the session as compacted")
+    func compactionAfterLastCall() throws {
+        let dir = try TempDir()
+        try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", read: 250_000)
+                + Fixture.compact(at: "2026-11-10T00:05:00Z"),
+            to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        let last = try #require(try indexer.lastCall(ofSession: "s1"))
+        #expect(last.compactedAfter)
+        #expect(last.contextTokens == 2 + 250_000)
+    }
+
+    @Test("a call after the compaction counts again, at its own size")
+    func callAfterCompactionCounts() throws {
+        let dir = try TempDir()
+        try dir.write(
+            Fixture.call(id: "m1", at: "2026-11-10T00:00:00Z", session: "s1", read: 250_000)
+                + Fixture.compact(at: "2026-11-10T00:05:00Z")
+                + Fixture.call(id: "m2", at: "2026-11-10T00:06:00Z", session: "s1", input: 0, read: 20_000),
+            to: "projects/-p/s1.jsonl")
+        let indexer = try makeIndexer(dir)
+        try indexer.indexAll()
+        let last = try #require(try indexer.lastCall(ofSession: "s1"))
+        #expect(!last.compactedAfter)
+        #expect(last.contextTokens == 20_000)
+    }
+
     @Test("a session's last call carries its final usage, its context size and an inherited TTL")
     func lastCallOfSession() throws {
         let dir = try TempDir()

@@ -11,6 +11,7 @@ public protocol IndexServing: AnyObject, Sendable {
     func report(period: ReportPeriod, now: Date, rebuildThreshold: Int) async throws -> UsageReport
     func expiryWarnings(registry: RegistryState, now: Double, warningContextTokens: Int) async throws
         -> [ExpiryWarning]
+    func largeSessions(registry: RegistryState, now: Double, thresholdTokens: Int) async throws -> [LargeSession]
     func health(now: Double) async throws -> IndexHealth
 }
 
@@ -61,6 +62,8 @@ public final class AppModel {
     public internal(set) var selectedReport: UsageReport?
     public private(set) var isComputing = false
     public internal(set) var warnings: [ExpiryWarning] = []
+    /// Running sessions with a large context, refreshed with the warnings (2-5 BR-C1).
+    public internal(set) var largeSessions: [LargeSession] = []
     public internal(set) var health = IndexHealth()
     public internal(set) var notificationAuthorization = NotificationAuthorization.notDetermined
     public private(set) var loginItemStatus: LoginItemStatus
@@ -72,6 +75,7 @@ public final class AppModel {
     private let environment: Environment
     private let scheduler: NotificationScheduling
     private let loginItem: LoginItemControlling
+    private let pasteboard: PasteboardWriting
     private let urlOpener: URLOpening
     private let registry: SessionRegistry
     private let clock: () -> Date
@@ -109,7 +113,8 @@ public final class AppModel {
 
     public init(
         environment: Environment, scheduler: NotificationScheduling, loginItem: LoginItemControlling,
-        urlOpener: URLOpening, registry: SessionRegistry? = nil, clock: @escaping () -> Date = Date.init,
+        urlOpener: URLOpening, pasteboard: PasteboardWriting = SystemPasteboard(), registry: SessionRegistry? = nil,
+        clock: @escaping () -> Date = Date.init,
         openIndex:
             @escaping @Sendable (_ root: URL, _ database: URL, _ opening: IndexOpening) throws
             -> any IndexServing = { try IndexService(root: $0, databaseURL: $1, opening: $2) }
@@ -119,6 +124,7 @@ public final class AppModel {
         self.scheduler = scheduler
         self.loginItem = loginItem
         self.urlOpener = urlOpener
+        self.pasteboard = pasteboard
         self.registry = registry ?? SessionRegistry(directory: environment.sessions)
         self.clock = clock
         self.settings = AppSettings.load(from: environment.defaults)
@@ -342,6 +348,9 @@ public final class AppModel {
     public func openReleasesPage() { urlOpener.open(Self.releasesURL) }
     public func openSource() { urlOpener.open(Self.sourceURL) }
     public func openLoginItemsSettings() { loginItem.openSystemSettings() }
+
+    /// Copies the compact prompt; false when the pasteboard refused it (2-5 BR-C11, BR-C12).
+    public func copyCompactPrompt() -> Bool { pasteboard.write(CompactPrompt.text) }
     public func openNotificationSettings() {
         let id = Bundle.main.bundleIdentifier ?? ""
         if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)") {
@@ -403,8 +412,14 @@ public final class AppModel {
         now = clock()
         let state = registry.load()
         do {
-            warnings = try await service.expiryWarnings(
+            // One read of the running sessions feeds both lists, so they never disagree about what is running.
+            let found = try await service.expiryWarnings(
                 registry: state, now: now.timeIntervalSince1970, warningContextTokens: settings.warningContextTokens)
+            let large = try await service.largeSessions(
+                registry: state, now: now.timeIntervalSince1970,
+                thresholdTokens: LargeSessionFinder.defaultThresholdTokens)
+            warnings = found
+            largeSessions = large
         } catch {
             indexFailed(error)
             return

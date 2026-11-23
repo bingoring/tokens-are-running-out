@@ -54,6 +54,17 @@ public actor IndexService {
             sessionsWithCallsSince: { try indexer.mainSessions(withCallsSince: $0) })
     }
 
+    /// Running sessions with a large context, for the compact suggestion (2-5 BR-C1).
+    public func largeSessions(
+        registry: RegistryState, now: Double = Date().timeIntervalSince1970,
+        thresholdTokens: Int = LargeSessionFinder.defaultThresholdTokens
+    ) throws -> [LargeSession] {
+        try LargeSessionFinder.sessions(
+            registry: registry, now: now, thresholdTokens: thresholdTokens, prices: priceTable(),
+            lastCall: { try indexer.lastCall(ofSession: $0) },
+            sessionsWithCallsSince: { try indexer.mainSessions(withCallsSince: $0) })
+    }
+
     public func mainSessions(withCallsSince since: Double) throws -> [String] {
         try indexer.mainSessions(withCallsSince: since)
     }

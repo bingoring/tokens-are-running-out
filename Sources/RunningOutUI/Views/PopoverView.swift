@@ -7,11 +7,25 @@ public struct PopoverView: View {
     @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
 
-    public init(model: AppModel) { self.model = model }
+    /// The popover's maximum height; nil means 80% of the screen's visible height (2-3 frontend-components §1).
+    private let maxHeight: CGFloat?
+
+    /// 80% of the visible height of the screen with the menu bar.
+    private static var defaultMaxHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 1_000) * 0.8 }
+
+    public init(model: AppModel, maxHeight: CGFloat? = nil) {
+        self.model = model
+        self.maxHeight = maxHeight
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            content
+            // The content scrolls once the popover reaches its maximum height; the footer below stays on screen.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 16) { content }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
             Divider()
             HStack {
                 Button {
@@ -32,6 +46,7 @@ public struct PopoverView: View {
         }
         .padding(16)
         .frame(width: 360)
+        .frame(maxHeight: maxHeight ?? Self.defaultMaxHeight)
         .onAppear { model.popoverVisible = true }
         .onDisappear { model.popoverVisible = false }
     }
@@ -68,7 +83,11 @@ public struct PopoverView: View {
             let active = Presentation.activeWarnings(model.warnings, now: model.now.timeIntervalSince1970)
             if !active.isEmpty {
                 ExpiringSessionsSection(
-                    warnings: active, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry)
+                    warnings: active, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry,
+                    copy: { model.copyCompactPrompt() })
+            }
+            if !model.largeSessions.isEmpty {
+                LargeSessionsSection(sessions: model.largeSessions, copy: { model.copyCompactPrompt() })
             }
             BreakdownSection(model: model)
             RebuildListSection(model: model)
@@ -124,6 +143,7 @@ struct ExpiringSessionsSection: View {
     let warnings: [ExpiryWarning]
     let now: Date
     let notificationsOn: Bool
+    let copy: () -> Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -131,7 +151,8 @@ struct ExpiringSessionsSection: View {
             // At most five rows, so the popover never grows past the screen.
             ForEach(Array(warnings.prefix(5).enumerated()), id: \.element.sessionID) { index, warning in
                 ExpiryWarningRow(
-                    warning: warning, now: now, showsAdvice: index == 0, notificationsOn: notificationsOn)
+                    warning: warning, now: now, showsAdvice: index == 0, notificationsOn: notificationsOn,
+                    showsCompactHint: Presentation.showsCompactHint(warning, isFirst: index == 0), copy: copy)
             }
             if warnings.count > 5 {
                 Text("\(warnings.count - 5) more sessions", bundle: .module).font(.callout)
@@ -145,10 +166,31 @@ struct ExpiryWarningRow: View {
     let now: Date
     let showsAdvice: Bool
     let notificationsOn: Bool
+    var showsCompactHint = false
+    var copy: () -> Bool = { false }
 
     var body: some View {
-        let minutes = Presentation.minutesLeft(until: warning.expiresAt, now: now.timeIntervalSince1970)
         VStack(alignment: .leading, spacing: 4) {
+            details
+            // Outside the combined element, so the button stays its own VoiceOver and keyboard stop (2-5 BR-C14).
+            if showsCompactHint {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(
+                        "Compact it before you leave, and only the summary is rebuilt when you come back.",
+                        bundle: .module
+                    )
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    CopyCompactPromptButton(title: warning.title, copy: copy)
+                }
+            }
+        }
+    }
+
+    private var details: some View {
+        let minutes = Presentation.minutesLeft(until: warning.expiresAt, now: now.timeIntervalSince1970)
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SessionTitle(title: warning.title)
                 Spacer(minLength: 8)

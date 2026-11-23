@@ -16,11 +16,11 @@ struct ExpiryCalculatorTests {
 
     private func last(
         _ id: String, ago: Double, ttl: CacheTTL = .oneHour, context: Int = 120_000, model: String = "claude-opus-5-5",
-        title: String? = nil
+        title: String? = nil, compactedAfter: Bool = false
     ) -> LastCall {
         LastCall(
             sessionID: id, file: URL(fileURLWithPath: "/p/\(id).jsonl"), timestamp: now - ago, ttl: ttl, model: model,
-            contextTokens: context, title: title)
+            contextTokens: context, title: title, compactedAfter: compactedAfter)
     }
 
     private func warnings(
@@ -34,6 +34,13 @@ struct ExpiryCalculatorTests {
                 #expect(since == now - 3600)
                 return recent
             })
+    }
+
+    @Test("a session compacted after its last call gets no warning: the next message rebuilds only the summary")
+    func compactedSessionHasNoWarning() throws {
+        let found = try warnings(
+            .available([running("s1")]), [last("s1", ago: 600, context: 620_000, compactedAfter: true)])
+        #expect(found.isEmpty)
     }
 
     @Test("an idle session with a large context gets a warning with its expiry and rebuild cost")

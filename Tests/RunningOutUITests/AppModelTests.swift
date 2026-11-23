@@ -33,6 +33,15 @@ import Testing
     func openSystemSettings() {}
 }
 
+@MainActor final class FakePasteboard: PasteboardWriting {
+    var written: [String] = []
+    var succeeds = true
+    func write(_ text: String) -> Bool {
+        written.append(text)
+        return succeeds
+    }
+}
+
 @MainActor final class FakeOpener: URLOpening {
     var opened: [URL] = []
     func open(_ url: URL) { opened.append(url) }
@@ -77,12 +86,14 @@ struct AppModelTests {
             to: "sessions/\(pid).json")
     }
 
-    private func makeModel(clock: @escaping () -> Date = { AppModelTests.now }) -> AppModel {
+    private func makeModel(
+        clock: @escaping () -> Date = { AppModelTests.now }, pasteboard: FakePasteboard = FakePasteboard()
+    ) -> AppModel {
         AppModel(
             environment: .init(
                 root: dir.appendingPathComponent("projects"), database: dir.appendingPathComponent("index.sqlite"),
                 sessions: dir.appendingPathComponent("sessions"), defaults: defaults, automaticUpdates: false),
-            scheduler: scheduler, loginItem: FakeLoginItem(), urlOpener: FakeOpener(),
+            scheduler: scheduler, loginItem: FakeLoginItem(), urlOpener: FakeOpener(), pasteboard: pasteboard,
             registry: SessionRegistry(directory: dir.appendingPathComponent("sessions"), isAlive: { _, _ in true }),
             clock: clock)
     }
@@ -119,6 +130,32 @@ struct AppModelTests {
         let expiresAt = Self.now.timeIntervalSince1970 + 50 * 60
         #expect(scheduler.added.map(\.identifier) == ["expiry.s1.\(Int(expiresAt)).10"])
         #expect(scheduler.added.first?.fireAt == Date(timeIntervalSince1970: expiresAt - 600))
+    }
+
+    @Test("large sessions are refreshed with the warnings, from the same running-session read")
+    func largeSessionsRefreshWithWarnings() async throws {
+        try write(call("m1", minutesAgo: 10, read: 250_000), to: "projects/-p/s1.jsonl")
+        try running("s1")
+        let model = makeModel()
+        await model.start()
+        #expect(model.largeSessions.map(\.sessionID) == ["s1"])
+        #expect(model.largeSessions.first?.contextTokens == 2 + 250_000)
+    }
+
+    @Test("copying puts the compact prompt on the pasteboard")
+    func copyWritesThePrompt() {
+        let pasteboard = FakePasteboard()
+        let model = makeModel(pasteboard: pasteboard)
+        #expect(model.copyCompactPrompt())
+        #expect(pasteboard.written == [CompactPrompt.text])
+    }
+
+    @Test("a failed pasteboard write is reported, so the button does not say Copied")
+    func failedCopyIsNotConfirmed() {
+        let pasteboard = FakePasteboard()
+        pasteboard.succeeds = false
+        let model = makeModel(pasteboard: pasteboard)
+        #expect(!model.copyCompactPrompt())
     }
 
     @Test("a denied permission schedules nothing, and turning notifications on asks only when undecided")

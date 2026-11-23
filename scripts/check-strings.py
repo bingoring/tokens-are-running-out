@@ -16,17 +16,25 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 CATALOG = os.path.join(ROOT, "Sources", "RunningOutUI", "Resources", "Localizable.xcstrings")
-DATA = os.path.join(ROOT, ".build", "xcode", "Build", "Intermediates.noindex", "**", "RunningOutUI.build", "**",
+# Xcode 27 names the folder RunningOutUI-t.build; earlier versions RunningOutUI.build.
+DATA = os.path.join(ROOT, ".build", "xcode", "Build", "Intermediates.noindex", "**", "RunningOutUI*.build", "**",
                     "*.stringsdata")
 
 # Only the most recently built configuration (Debug or Release): an older build keeps old strings.
 by_configuration = {}
 for path in glob.glob(DATA, recursive=True):
-    configuration = path.split(os.sep + "RunningOutUI.build")[0].rsplit(os.sep, 1)[-1]
+    configuration = re.split(re.escape(os.sep) + r"RunningOutUI[^" + re.escape(os.sep) + r"]*\.build", path)[0]
+    configuration = configuration.rsplit(os.sep, 1)[-1]
     by_configuration.setdefault(configuration, []).append(path)
 newest = max(by_configuration.values(), key=lambda paths: max(map(os.path.getmtime, paths)), default=[])
-used = set()
+# One file per source file: a build for one architecture leaves the other architecture's older strings behind.
+latest = {}
 for path in newest:
+    name = os.path.basename(path)
+    if name not in latest or os.path.getmtime(path) > os.path.getmtime(latest[name]):
+        latest[name] = path
+used = set()
+for path in latest.values():
     with open(path, encoding="utf-8") as fh:
         for entries in json.load(fh).get("tables", {}).values():
             used.update(entry["key"] for entry in entries)
