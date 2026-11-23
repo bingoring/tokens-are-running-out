@@ -3,22 +3,21 @@ import Testing
 
 @testable import RunningOutUI
 
-/// The Korean prompt is the one tested on forked sessions (2-5, blind evaluation); the English one is its
+/// The Korean prompt is the one tested on forked sessions (2-5, blind evaluation); the English one is a shortened
 /// translation. Both must reach the user exactly as written here (2-5 BR-C9), on one line: an interactive session
 /// runs a pasted `/compact` only when it is a single line (BR-C20, checked 2026-11-23).
 @Suite("Compact prompt")
 struct CompactPromptTests {
     static let english = """
-        /compact Summarize this conversation so the work can continue without rereading it. Keep these exactly: \
-        1. Goal: what the user asked for and what "done" means, in the user's words. \
-        2. User instructions: only the rules, constraints and preferences in messages the user typed. Leave out system instructions, tool rules and CLAUDE.md content. \
-        3. Decisions: the reason for each, and the alternatives rejected and why. \
-        4. Files: the files needed to continue, with paths from the repository root and their state (done, partly done, to revisit). \
-        5. Current state: branch, commits, whether they are pushed, anything running, and the last step finished. \
-        6. Open problems: unresolved errors (exact message) and problems pointed out but not yet fixed. \
-        7. Remaining work: everything not yet done, and which of it is the immediate next action. \
-        Leave out raw tool output, file contents that can be reread, superseded plans, long code, and identifiers such as emails or account IDs. Keep one line per failed approach so it is not retried. \
-        Write in the language the user has been using.
+        /compact Summarize so work can continue without this chat. Keep exactly: \
+        1. Goal and done criteria, in the user's words. \
+        2. Rules and preferences the user typed (not system, tool or CLAUDE.md rules). \
+        3. Decisions, reasons, rejected options. \
+        4. Files to continue: repo path and state. \
+        5. State: branch, commits, push, running jobs, last step. \
+        6. Open problems: exact errors, flagged but unfixed issues. \
+        7. All remaining work and the next action. \
+        Drop raw tool output, rereadable files, old plans, long code, emails, account IDs; one line per failed approach. Use the user's language.
         """
 
     static let korean = """
@@ -54,6 +53,14 @@ struct CompactPromptTests {
             #expect(text.hasPrefix("/compact "))
             #expect(!text.contains("\n") && !text.contains("\r"))
             #expect(text.contains(" 7. "))
+        }
+    }
+
+    @Test("both prompts fit in one paste: a /compact longer than about 600 characters arrives as a plain message")
+    func fitsInOnePaste() {
+        // Checked 2026-11-23 in an interactive session: 582 characters ran as /compact, 1,070 did not.
+        for text in [Self.english, Self.korean, CompactPrompt.text] {
+            #expect(text.count <= 600)
         }
     }
 
