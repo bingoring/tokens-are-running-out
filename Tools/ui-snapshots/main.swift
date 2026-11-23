@@ -159,9 +159,16 @@ func main() throws {
         ("popover-format-change", .preview(phase: .ready, now: now, report: report, health: unhealthy)),
         ("popover-empty", .preview(phase: .ready, now: now, report: empty)),
     ]
+    // Full length for review, whatever the screen of the machine that renders them.
     for (name, model) in states {
-        try render(PopoverView(model: model), name: name, width: 360, to: folder)
+        try render(PopoverView(model: model, maxHeight: 10_000), name: name, width: 360, to: folder)
     }
+    // The popover at its maximum height on a small screen: the content scrolls, Settings and Quit stay.
+    try render(
+        PopoverView(
+            model: .preview(phase: .ready, now: now, report: report, warnings: many, largeSessions: largeMany),
+            maxHeight: 700),
+        name: "popover-capped", width: 360, to: folder)
     try render(RebuildDetailView(event: report.rebuilds[0]), name: "reason-short-break", width: 320, to: folder)
     try render(RebuildDetailView(event: report.rebuilds[1]), name: "reason-long-break", width: 320, to: folder)
     try render(RebuildDetailView(event: unpricedEvent), name: "reason-unpriced", width: 320, to: folder)

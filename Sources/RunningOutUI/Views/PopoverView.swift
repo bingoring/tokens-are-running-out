@@ -7,11 +7,25 @@ public struct PopoverView: View {
     @Bindable var model: AppModel
     @Environment(\.openSettings) private var openSettings
 
-    public init(model: AppModel) { self.model = model }
+    /// The popover's maximum height; nil means 80% of the screen's visible height (2-3 frontend-components §1).
+    private let maxHeight: CGFloat?
+
+    /// 80% of the visible height of the screen with the menu bar.
+    private static var defaultMaxHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 1_000) * 0.8 }
+
+    public init(model: AppModel, maxHeight: CGFloat? = nil) {
+        self.model = model
+        self.maxHeight = maxHeight
+    }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            content
+            // The content scrolls once the popover reaches its maximum height; the footer below stays on screen.
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 16) { content }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollBounceBehavior(.basedOnSize)
             Divider()
             HStack {
                 Button {
@@ -32,6 +46,7 @@ public struct PopoverView: View {
         }
         .padding(16)
         .frame(width: 360)
+        .frame(maxHeight: maxHeight ?? Self.defaultMaxHeight)
         .onAppear { model.popoverVisible = true }
         .onDisappear { model.popoverVisible = false }
     }
