@@ -10,6 +10,9 @@ public struct PopoverView: View {
     /// The popover's maximum height; nil means 80% of the screen's visible height (2-3 frontend-components §1).
     private let maxHeight: CGFloat?
 
+    /// Room for the padding, the divider and the Settings and Quit row below the scrolling content.
+    private static let footerAllowance: CGFloat = 100
+
     /// 80% of the visible height of the screen with the menu bar.
     private static var defaultMaxHeight: CGFloat { (NSScreen.main?.visibleFrame.height ?? 1_000) * 0.8 }
 
@@ -26,6 +29,10 @@ public struct PopoverView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollBounceBehavior(.basedOnSize)
+            // As tall as the content up to the cap, whatever height the window proposes: the menu bar window can
+            // propose less than the content, and a scroll view that takes the proposal shows nothing (v0.2.0).
+            .frame(maxHeight: (maxHeight ?? Self.defaultMaxHeight) - Self.footerAllowance)
+            .fixedSize(horizontal: false, vertical: true)
             Divider()
             HStack {
                 Button {
@@ -46,7 +53,6 @@ public struct PopoverView: View {
         }
         .padding(16)
         .frame(width: 360)
-        .frame(maxHeight: maxHeight ?? Self.defaultMaxHeight)
         .onAppear { model.popoverVisible = true }
         .onDisappear { model.popoverVisible = false }
     }
