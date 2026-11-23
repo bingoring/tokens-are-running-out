@@ -80,6 +80,23 @@ public enum Presentation {
         return seconds < 60 ? 0 : Int((seconds / 60).rounded(.up))
     }
 
+    /// The "compact before you leave" hint goes under the first warning's advice, when that session is idle and
+    /// large (2-5 BR-C14).
+    public static func showsCompactHint(_ warning: ExpiryWarning, isFirst: Bool) -> Bool {
+        isFirst && warning.status == .idle && warning.contextTokens >= LargeSessionFinder.defaultThresholdTokens
+    }
+
+    /// A large session's context and what each call re-reads at the list price (2-5 BR-C6, BR-C7).
+    public static func largeSessionDetail(_ session: LargeSession, locale: Locale = .current) -> String {
+        let tokens = tokens(session.contextTokens, locale: locale)
+        let cost = money(session.readCost, locale: locale)
+        return session.priced
+            ? String(localized: "Context \(tokens) · re-reads about \(cost) per call", bundle: .module, locale: locale)
+            : String(
+                localized: "Context \(tokens) · re-reads an estimated \(cost) per call", bundle: .module, locale: locale
+            )
+    }
+
     /// Warnings whose cache has not expired yet; a warning disappears the moment its cache expires.
     public static func activeWarnings(_ warnings: [ExpiryWarning], now: Double) -> [ExpiryWarning] {
         warnings.filter { $0.expiresAt > now }

@@ -68,7 +68,11 @@ public struct PopoverView: View {
             let active = Presentation.activeWarnings(model.warnings, now: model.now.timeIntervalSince1970)
             if !active.isEmpty {
                 ExpiringSessionsSection(
-                    warnings: active, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry)
+                    warnings: active, now: model.now, notificationsOn: model.settings.notifyBeforeExpiry,
+                    copy: { model.copyCompactPrompt() })
+            }
+            if !model.largeSessions.isEmpty {
+                LargeSessionsSection(sessions: model.largeSessions, copy: { model.copyCompactPrompt() })
             }
             BreakdownSection(model: model)
             RebuildListSection(model: model)
@@ -124,6 +128,7 @@ struct ExpiringSessionsSection: View {
     let warnings: [ExpiryWarning]
     let now: Date
     let notificationsOn: Bool
+    let copy: () -> Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -131,7 +136,8 @@ struct ExpiringSessionsSection: View {
             // At most five rows, so the popover never grows past the screen.
             ForEach(Array(warnings.prefix(5).enumerated()), id: \.element.sessionID) { index, warning in
                 ExpiryWarningRow(
-                    warning: warning, now: now, showsAdvice: index == 0, notificationsOn: notificationsOn)
+                    warning: warning, now: now, showsAdvice: index == 0, notificationsOn: notificationsOn,
+                    showsCompactHint: Presentation.showsCompactHint(warning, isFirst: index == 0), copy: copy)
             }
             if warnings.count > 5 {
                 Text("\(warnings.count - 5) more sessions", bundle: .module).font(.callout)
@@ -145,10 +151,31 @@ struct ExpiryWarningRow: View {
     let now: Date
     let showsAdvice: Bool
     let notificationsOn: Bool
+    var showsCompactHint = false
+    var copy: () -> Bool = { false }
 
     var body: some View {
-        let minutes = Presentation.minutesLeft(until: warning.expiresAt, now: now.timeIntervalSince1970)
         VStack(alignment: .leading, spacing: 4) {
+            details
+            // Outside the combined element, so the button stays its own VoiceOver and keyboard stop (2-5 BR-C14).
+            if showsCompactHint {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(
+                        "Compact it before you leave, and only the summary is rebuilt when you come back.",
+                        bundle: .module
+                    )
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    CopyCompactPromptButton(title: warning.title, copy: copy)
+                }
+            }
+        }
+    }
+
+    private var details: some View {
+        let minutes = Presentation.minutesLeft(until: warning.expiresAt, now: now.timeIntervalSince1970)
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SessionTitle(title: warning.title)
                 Spacer(minLength: 8)

@@ -467,12 +467,102 @@
         }
       }
     },
+    "Claude Code's running-session files can't be read, so this session may have ended.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Claude Code의 실행 세션 파일을 읽을 수 없어, 이 세션은 이미 끝났을 수도 있습니다."
+          }
+        }
+      }
+    },
+    "Compact it before you leave, and only the summary is rebuilt when you come back.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "떠나기 전에 정리해 두면, 돌아와서 다시 만드는 것은 요약뿐입니다."
+          }
+        }
+      }
+    },
+    "Compact prompt copied": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "정리 프롬프트를 복사했습니다"
+          }
+        }
+      }
+    },
+    "Context %@ · re-reads about %@ per call": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컨텍스트 %1$@ · 호출마다 다시 읽는 비용 약 %2$@"
+          }
+        }
+      }
+    },
+    "Context %@ · re-reads an estimated %@ per call": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "컨텍스트 %1$@ · 호출마다 다시 읽는 비용 추정 %2$@"
+          }
+        }
+      }
+    },
     "Continuing before the cache expired would have cost %@ instead.": {
       "localizations": {
         "ko": {
           "stringUnit": {
             "state": "translated",
             "value": "캐시가 만료되기 전에 이어 갔다면 %@만 들었을 것입니다."
+          }
+        }
+      }
+    },
+    "Copied": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "복사됨"
+          }
+        }
+      }
+    },
+    "Copies a /compact command that keeps the goal, decisions, files, state and remaining work.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "목표, 결정, 파일, 상태, 남은 작업을 남기는 /compact 명령을 복사합니다."
+          }
+        }
+      }
+    },
+    "Copy compact prompt": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "정리 프롬프트 복사"
+          }
+        }
+      }
+    },
+    "Copy compact prompt for %@": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 세션의 정리 프롬프트 복사"
           }
         }
       }
@@ -513,6 +603,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "일반"
+          }
+        }
+      }
+    },
+    "Large sessions": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "큰 세션"
           }
         }
       }
@@ -733,6 +833,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "기타"
+          }
+        }
+      }
+    },
+    "Paste it into the session and press Return. It works best when a task is done.": {
+      "localizations": {
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "세션에 붙여 넣고 Return을 누르세요. 작업이 끝난 시점에 하면 요약이 가장 깔끔합니다."
           }
         }
       }
