@@ -163,10 +163,13 @@ public struct LastCall: Sendable, Equatable {
     public var model: String
     public var contextTokens: Int
     public var title: String?
+    /// A compaction comes after this call in the same transcript: the cache was cleared and the next message
+    /// rebuilds only the summary (2-5 BR-C17).
+    public var compactedAfter: Bool
 
     public init(
         sessionID: String, file: URL, timestamp: Double, ttl: CacheTTL, model: String, contextTokens: Int,
-        title: String?
+        title: String?, compactedAfter: Bool = false
     ) {
         self.sessionID = sessionID
         self.file = file
@@ -175,6 +178,7 @@ public struct LastCall: Sendable, Equatable {
         self.model = model
         self.contextTokens = contextTokens
         self.title = title
+        self.compactedAfter = compactedAfter
     }
 }
 
@@ -550,10 +554,17 @@ public final class Indexer {
                 "SELECT ttl FROM occurrences WHERE file_id = ? AND ttl IS NOT NULL ORDER BY seq DESC LIMIT 1",
                 [.int(file.id)]
             ) { CacheTTL(rawValue: $0.text(0)) } ?? nil
+        let compacted =
+            try db.queryRow(
+                """
+                SELECT EXISTS(SELECT 1 FROM marks WHERE file_id = ?
+                AND seq > (SELECT MAX(seq) FROM occurrences WHERE file_id = ?))
+                """, [.int(file.id), .int(file.id)]
+            ) { $0.int(0) != 0 } ?? false
         return LastCall(
             sessionID: sessionID, file: URL(fileURLWithPath: file.path), timestamp: call.timestamp,
             ttl: call.ttl ?? inherited ?? .oneHour, model: call.model, contextTokens: call.contextTokens,
-            title: try title(of: sessionID))
+            title: try title(of: sessionID), compactedAfter: compacted)
     }
 
     /// Main sessions with a call at or after `since`, for when running sessions cannot be read (2-3 BR-E1).
