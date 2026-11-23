@@ -137,6 +137,21 @@ public final class MainAppLoginItem: LoginItemControlling {
     public func openSystemSettings() { SMAppService.openSystemSettingsLoginItems() }
 }
 
+/// The pasteboard, behind a protocol so tests can check what was copied (2-5 BR-C11).
+@MainActor public protocol PasteboardWriting: AnyObject {
+    /// Replaces the pasteboard's contents with plain text; false when the pasteboard refused it.
+    func write(_ text: String) -> Bool
+}
+
+public final class SystemPasteboard: PasteboardWriting {
+    public init() {}
+
+    public func write(_ text: String) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
 /// Hands links to the default browser or System Settings. The app itself never uses the network.
 public final class WorkspaceURLOpener: URLOpening {
     public init() {}

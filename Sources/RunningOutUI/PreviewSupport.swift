@@ -3,7 +3,10 @@ import RunningOutCore
 
 /// No-op system services and a model filled with given state, for screenshots of each screen state.
 /// Only synthetic values go in here.
-@MainActor public final class PreviewServices: NotificationScheduling, LoginItemControlling, URLOpening {
+@MainActor
+public final class PreviewServices: NotificationScheduling, LoginItemControlling, URLOpening,
+    PasteboardWriting
+{
     public var notificationStatus: NotificationAuthorization
     public var status: LoginItemStatus
 
@@ -20,11 +23,13 @@ import RunningOutCore
     public func setEnabled(_ enabled: Bool) throws {}
     public func openSystemSettings() {}
     public func open(_ url: URL) {}
+    public func write(_ text: String) -> Bool { true }
 }
 
 extension AppModel {
     public static func preview(
         phase: Phase, now: Date, report: UsageReport? = nil, warnings: [ExpiryWarning] = [],
+        largeSessions: [LargeSession] = [],
         health: IndexHealth = IndexHealth(), settings: AppSettings = AppSettings(),
         services: PreviewServices = PreviewServices()
     ) -> AppModel {
@@ -35,11 +40,12 @@ extension AppModel {
         let model = AppModel(
             environment: Environment(
                 root: missing, database: missing, sessions: missing, defaults: defaults, automaticUpdates: false),
-            scheduler: services, loginItem: services, urlOpener: services, clock: { now })
+            scheduler: services, loginItem: services, urlOpener: services, pasteboard: services, clock: { now })
         model.phase = phase
         model.todayReport = report
         model.selectedReport = report
         model.warnings = warnings
+        model.largeSessions = largeSessions
         model.health = health
         model.notificationAuthorization = services.notificationStatus
         defaults.removePersistentDomain(forName: suite)
