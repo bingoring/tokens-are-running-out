@@ -16,7 +16,7 @@
 | 2-5 | 큰 세션 정리 안내 | MERGED | | | | [문서](02-construction/05-compact-guidance.md) · [#10](https://github.com/bingoring/tokens-are-running-out/pull/10) · [#11](https://github.com/bingoring/tokens-are-running-out/pull/11) |
 | R-1 | Independent Code Review 🔍 | MERGED | | | | [문서](0R-review/01-independent-review.md) · [#5](https://github.com/bingoring/tokens-are-running-out/pull/5) |
 | 3-1 | 첫 공개 | IN_PROGRESS | | 구현: 소개 글 게시 → 기준선 기록 → 3-2 제안 | 오너 할 일 | [문서](03-operations/01-first-release.md) |
-| 3-2 | 반응 확인 | PENDING | | | | |
+| 3-2 | 반응 확인 | IN_PROGRESS | | 계획: 관찰 지표·기간·판정 기준·기본값 재판단·후속 후보 우선순위 작성 | | [#16](https://github.com/bingoring/tokens-are-running-out/pull/16) |
 
 ## 오너 할 일
 
