@@ -1,8 +1,7 @@
 ---
+id: 1-1
 phase: 01-inception
 stage: 01-context-synthesis
-status: HUMAN_APPROVED
-updated: 2026-11-17
 ---
 
 # [Stage 1-1] Context Synthesis
@@ -88,3 +87,7 @@ Claude Code 사용량이 **왜** 줄었는지 원인별로 보여주고, 캐시�
 ## 다음 단계
 
 승인 후 → `STATUS.md`의 이 스테이지 상태를 `HUMAN_APPROVED`로 업데이트 → [`02-domain-model.md`](02-domain-model.md)
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

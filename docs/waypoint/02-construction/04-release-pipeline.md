@@ -1,8 +1,7 @@
 ---
+id: 2-4
 phase: 02-construction
 stage: 04-release-pipeline
-status: HUMAN_APPROVED
-updated: 2026-11-18
 ---
 
 # [Stage 2-4] 릴리스 파이프라인 (서명 · 공증 · Homebrew tap)
@@ -187,3 +186,7 @@ Finder가 쓰는 `NSWorkspace` 아이콘을 크기별로 렌더링해 확인했�
 ## 다음 단계
 
 승인 후 → `STATUS.md` 갱신 → 기능 브랜치 `feature/2-4-release-pipeline`에서 아이콘과 스크립트·워크플로 구현(비밀 값 없이 검증 가능한 부분 먼저) → 사용자 작업 뒤 사전 릴리스로 끝까지 시험 → 독립 리뷰 → PR
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

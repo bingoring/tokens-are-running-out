@@ -1,8 +1,7 @@
 ---
+id: 2-1
 phase: 02-construction
 stage: 01-reader-and-index
-status: HUMAN_APPROVED
-updated: 2026-11-17
 ---
 
 # [Stage 2-1] 기록 리더와 색인
@@ -107,3 +106,7 @@ Claude Code 기록 파일을 읽기 전용으로 증분 색인하는 Swift 패�
 ## 다음 단계
 
 승인 후 → `STATUS.md`의 이 스테이지 상태를 갱신 → 기능 브랜치 `feature/2-1-reader-index`에서 Build Spec §4 체크리스트대로 구현 → PR
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

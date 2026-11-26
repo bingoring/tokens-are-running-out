@@ -1,8 +1,7 @@
 ---
+id: 1-3
 phase: 01-inception
 stage: 03-architecture-decision
-status: HUMAN_APPROVED
-updated: 2026-11-17
 ---
 
 # [Stage 1-3] Architecture Decision ⚠️
@@ -97,3 +96,7 @@ Swift 6 + SwiftUI 네이티브 메뉴 막대 앱(macOS 14 이상). 분석 코어
 ## 다음 단계
 
 승인 후 → `STATUS.md`의 이 스테이지 상태를 `HUMAN_APPROVED`로 업데이트 → Construction 2-1(CLI 세션 확인 · 기록 리더와 색인) 스테이지 문서 작성
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

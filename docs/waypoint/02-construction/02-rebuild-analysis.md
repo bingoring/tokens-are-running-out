@@ -1,8 +1,7 @@
 ---
+id: 2-2
 phase: 02-construction
 stage: 02-rebuild-analysis
-status: HUMAN_APPROVED
-updated: 2026-11-17
 ---
 
 # [Stage 2-2] 재구축 판정 · 원인 분류 · 비용 분해
@@ -150,3 +149,7 @@ updated: 2026-11-17
 ## 다음 단계
 
 PR 머지 → `STATUS.md` 갱신 → 2-3 제안(메뉴 막대 앱 화면, 만료 경고, 실행 중인 세션, 알림)
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

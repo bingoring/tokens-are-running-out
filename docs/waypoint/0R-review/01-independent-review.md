@@ -1,8 +1,7 @@
 ---
+id: R-1
 phase: 0R-review
 stage: 01-independent-review
-status: HUMAN_APPROVED
-updated: 2026-11-20
 scope: Construction 2-1 ~ 2-4 전체(앱, 개발용 CLI, 프로토타입, 릴리스 파이프라인)
 ---
 
@@ -213,3 +212,7 @@ PR #5의 끝 커밋에 태그를 올렸다. 이 커밋의 CI는 통과했고, �
 ### 머지
 
 사용자가 PR [#5](https://github.com/bingoring/tokens-are-running-out/pull/5)를 `main`에 머지했다(`b8b05f6`, 2026-11-20). PR의 마지막 커밋 `b92cc25`의 CI는 통과했다.
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.

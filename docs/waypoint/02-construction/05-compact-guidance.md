@@ -1,8 +1,7 @@
 ---
+id: 2-5
 phase: 02-construction
 stage: 05-compact-guidance
-status: HUMAN_APPROVED
-updated: 2026-11-24
 ---
 
 # [Stage 2-5] 큰 세션 정리 안내 (compact 프롬프트 · 시점 안내)
@@ -197,3 +196,7 @@ updated: 2026-11-24
 - **2-5 기능:** 실행 중인 세션 중 20만 토큰을 넘는 세션이 둘 있는 상태에서 사용자가 확인했다. 큰 세션 영역, 복사 버튼과 2초 동안의 "복사됨", 복사된 한 줄 프롬프트, VoiceOver의 이름과 복사 알림, 키보드 이동이 모두 정상이었다.
 - **확인하지 않은 것:** 데스크톱 앱 세션에 붙여 넣었을 때 `/compact`로 실행되는지, compact 뒤 그 세션이 목록에서 빠지는 동작(단위 테스트로만 확인). 실제 작업 세션을 정리하게 되므로 선택 항목으로 두었다.
 - **결과:** Build Spec을 IMPLEMENTED로 바꿨다. 2-5를 마친다.
+
+## 진행 기록
+
+- 이전 기록은 [HISTORY.md](../HISTORY.md)에 있다.
