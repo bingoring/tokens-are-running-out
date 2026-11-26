@@ -16,9 +16,9 @@
 | 2-5 | 큰 세션 정리 안내 | MERGED | | | | [문서](02-construction/05-compact-guidance.md) · [#10](https://github.com/bingoring/tokens-are-running-out/pull/10) · [#11](https://github.com/bingoring/tokens-are-running-out/pull/11) |
 | R-1 | Independent Code Review 🔍 | MERGED | | | | [문서](0R-review/01-independent-review.md) · [#5](https://github.com/bingoring/tokens-are-running-out/pull/5) |
 | 3-1 | 첫 공개 | IN_PROGRESS | | 구현: 소개 글 게시가 확인되면 닫음(게시·기준선 기록은 3-2가 맡음) | 오너 할 일 | [문서](03-operations/01-first-release.md) |
-| 3-2 | 반응 확인 | IN_PROGRESS | | 구현: 결과 공유 템플릿 → 계획 PR 중간 머지 → 게시 직전 D+0 스냅숏 → 28일 관찰 | | [#16](https://github.com/bingoring/tokens-are-running-out/pull/16) |
+| 3-2 | 반응 확인 | IN_PROGRESS | | 구현: 계획·결과 공유 템플릿 머지(#16) → 게시 직전 D+0 스냅숏 → 28일 관찰 | 오너 할 일 | [#16](https://github.com/bingoring/tokens-are-running-out/pull/16) |
 
 ## 오너 할 일
 
-- [ ] 3-1 소개 글 게시(Show HN, GeekNews) (막음: 3-1)
+- [ ] 소개 글 게시(Show HN, GeekNews). 올리기 직전에 "곧 올린다"고 알림(3-2의 D+0 스냅숏) (막음: 3-1, 3-2)
 - [ ] 2-5 기기에서 못 본 두 가지 확인: 데스크톱 앱에서 붙여 넣기, compact 뒤 목록 제외
