@@ -17,7 +17,7 @@ scope: Construction 2-1 ~ 2-4 전체(앱, 개발용 CLI, 프로토타입, 릴리
 - 코드: `Sources/`, `Tests/`, `Tools/`, `scripts/`, `prototype/`, `.github/workflows/`, `Package.swift`(검토 기준 `main` `30ef8a8`, 약 8,600줄)
 - 품질 기준선: [`../01-inception/03-architecture-decision.md`](../01-inception/03-architecture-decision.md) "리뷰 게이트의 품질 기준선"(정확성, 보안·개인정보, 성능 예산, 정적 분석, 화면)
 - 명세: 각 유닛의 `business-rules.md`, `business-logic-model.md`, `domain-entities.md`, 스테이지 문서의 편차 로그, [`../DECISIONS.md`](../DECISIONS.md)
-- 리뷰어 지시: [`../../../_templates/reviewer-brief-template.md`](../../../_templates/reviewer-brief-template.md)를 관점마다 채워서 사용
+- 리뷰어 지시: `waypoint:review-gate` 스킬이 안내하는 reviewer-brief 템플릿을 관점마다 채워서 사용
 
 ## 체크리스트
 

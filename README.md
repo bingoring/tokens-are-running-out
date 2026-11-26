@@ -13,7 +13,7 @@ Most usage tools show a gauge. This one reads your local Claude Code transcripts
   </picture>
 </p>
 
-> **Status: released.** Install it with Homebrew from [bingoring/homebrew-tap](https://github.com/bingoring/homebrew-tap) or download a signed and notarized build from [Releases](https://github.com/bingoring/tokens-are-running-out/releases). The design and its approval gates live in [`docs/dlc/projects/tokens-are-running-out`](docs/dlc/projects/tokens-are-running-out/STATUS.md) ([Waypoint](https://github.com/bingoring/waypoint)).
+> **Status: released.** Install it with Homebrew from [bingoring/homebrew-tap](https://github.com/bingoring/homebrew-tap) or download a signed and notarized build from [Releases](https://github.com/bingoring/tokens-are-running-out/releases). The design and its approval gates live in [`docs/waypoint`](docs/waypoint/STATUS.md) ([Waypoint](https://github.com/bingoring/waypoint)).
 
 ## What it does
 
