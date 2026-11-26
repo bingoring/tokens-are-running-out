@@ -1,0 +1,116 @@
+name: Share your numbers
+description: Tell us what the app showed on your Mac, so the defaults are checked against more than one person's history.
+title: "Numbers: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing. These reports decide whether two defaults should change: a call counts as a cache rebuild when it writes 50K tokens or more, and a running session is listed under Large sessions at 200K tokens or more.
+
+        Please keep your work private. Do not paste conversation content, session titles, file paths from your projects or anything from `~/.claude`. Counts and percentages are enough. If you attach a screenshot, hide the session titles first.
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Shown in Settings, or run `brew info --cask tokens-are-running-out`.
+      placeholder: 0.2.1
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 15.5
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Mac
+      options:
+        - Apple silicon
+        - Intel
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where you use Claude Code
+      multiple: true
+      options:
+        - Terminal
+        - Claude desktop app (Code tab)
+        - IDE extension
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model you use most
+      placeholder: Opus 4.8
+  - type: dropdown
+    id: context-window
+    attributes:
+      label: Context window
+      options:
+        - 1M
+        - 200K
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: autocompact
+    attributes:
+      label: Did you change when Claude Code auto-compacts?
+      description: With `/autocompact`, the `autoCompactWindow` setting or `CLAUDE_CODE_DISABLE_1M_CONTEXT`.
+      options:
+        - "No"
+        - "Yes"
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: breakdown
+    attributes:
+      label: Cost by cause, last 7 days
+      description: Set the period to 7 days and copy the percentage for each cause.
+      placeholder: |
+        Normal work 40%
+        Cache rebuilt after a short break 5%
+        ...
+  - type: textarea
+    id: threshold
+    attributes:
+      label: Rebuild threshold, 50K and 10K
+      description: |
+        With the period on 7 days, write the percentage in "… went to rebuilding caches after a break" and the number of rows under Expensive cache rebuilds with Show all causes on (write 50+ if the list is full).
+        Then in Settings, set "Count a call as a cache rebuild when it writes at least" to 10K and write both again. Set it back to 50K afterwards.
+      placeholder: |
+        50K: 12%, 18 rows
+        10K: 12%, 21 rows
+  - type: dropdown
+    id: large-sessions
+    attributes:
+      label: How often do you see sessions under Large sessions?
+      options:
+        - Never
+        - Sometimes
+        - Almost always
+  - type: dropdown
+    id: cache-lifetime
+    attributes:
+      label: Cache lifetime named in rebuild reasons
+      description: Open the reason for a rebuild. It says "1-hour cache lifetime" or "5-minute cache lifetime".
+      options:
+        - 1 hour
+        - 5 minutes
+        - Both
+        - Not sure
+  - type: textarea
+    id: compact-prompt
+    attributes:
+      label: If you tried the compact prompt, how did it go?
+  - type: textarea
+    id: match
+    attributes:
+      label: Did the breakdown match what you thought was using up your usage?
